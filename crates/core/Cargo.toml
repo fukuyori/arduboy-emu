@@ -1,0 +1,8 @@
+[package]
+name = "arduboy-core"
+version = "0.3.0"
+edition = "2021"
+description = "Cycle-accurate ATmega32u4 emulation core for Arduboy"
+license = "MIT OR Apache-2.0"
+
+[dev-dependencies]

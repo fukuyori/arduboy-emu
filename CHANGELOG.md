@@ -1,0 +1,110 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.3.0] - 2025-02-13
+
+### Added
+
+- **Timer4 (10-bit high-speed)**: ATmega32u4 Timer/Counter4 emulation
+  - Normal, CTC, and PWM modes with OCR4C as TOP
+  - Extended prescaler (/1 through /16384)
+  - 10-bit counter with TC4H high-byte buffer register
+  - OCR4A/B/C/D compare registers, dead time (DT4)
+  - Overflow and compare-match interrupts (TIMSK4/TIFR4)
+  - Tone detection in CTC mode for audio output
+- **Sample-accurate audio waveform buffer**: `AudioBuffer` module
+  - Records pin-level transitions with CPU tick timestamps per frame
+  - Converts edge buffers to stereo interleaved PCM at target sample rate
+  - Hybrid audio source in frontend: sample-accurate PCM when GPIO edges
+    exist, automatic fallback to timer frequency synthesis otherwise
+  - Ring buffer between main thread and rodio audio thread
+
+### Changed
+
+- Audio source replaced: `StereoSquareWave` → `HybridAudioSource`
+  with `Arc<Mutex<VecDeque<f32>>>` ring buffer for sample-accurate output
+- Timer tone priority: Timer3 > Timer4 > GPIO PC6 (left),
+  Timer1 > GPIO PB5 (right)
+
+## [0.2.0] - 2025-02-13
+
+### Added
+
+- **Disassembler**: `disasm` module with `disassemble()`, `format_sreg()`,
+  `disassemble_range()` for instruction-level debugging
+- **Breakpoints**: `--break <addr>` CLI option (repeatable), hex byte-address,
+  stops execution when PC matches
+- **Step mode**: `--step` interactive debugger with commands:
+  Enter=step, N=step N, r=run to break, d=dump, q=quit
+- **Register dump**: `dump_regs()` showing R0-R31, PC, SP, SREG flags, X/Y/Z
+  pairs; D key in GUI mode, integrated into step and breakpoint output
+- **SSD1306 display invert**: 0xA6 (normal) / 0xA7 (inverse) commands,
+  XOR applied during framebuffer rendering
+- **SSD1306 contrast control**: 0x81 command, brightness scaled by contrast
+  byte (0x00=black, 0xFF=full)
+- **Window scale toggle**: 1–6 number keys change scale in GUI mode
+- **Fullscreen**: F11 toggles borderless fullscreen (12× scale)
+- **Screenshot**: S key saves BMP file (screenshot_NNNN.bmp)
+- **Scale CLI option**: `--scale N` sets initial scale (1–6)
+- **2-channel stereo audio output**: Timer3 → left, Timer1 → right,
+  GPIO PC6 → left fallback, GPIO PB5 → right fallback
+- **GPIO speaker 2 (PB5)**: Bit-bang edge detection for right channel
+- **USB Serial emulation**: UENUM, UEDATX, UEINTX register handling,
+  CDC endpoint capture (EP3+), --serial flag outputs to stderr
+- **USB register stubs**: USBCON, USBSTA, UDADDR, UESTA0X, UEBCLX for
+  programs that check USB state
+
+## [0.1.0] - 2025-02-13
+
+Initial release.
+
+### Added
+
+- **AVR CPU core**: 80+ ATmega32u4 instructions with accurate flag computation
+  - Arithmetic: ADD, ADC, SUB, SUBI, SBC, SBCI, AND, ANDI, OR, ORI, EOR, COM,
+    NEG, INC, DEC, MUL, MULS, MULSU, FMUL, FMULS, ADIW, SBIW
+  - Compare: CP, CPC, CPI, CPSE
+  - Branch: RJMP, RCALL, RET, RETI, JMP, CALL, IJMP, ICALL, BRBS, BRBC,
+    SBRC, SBRS, SBIC, SBIS
+  - Data transfer: MOV, MOVW, LDI, LDS, STS, LD/ST with X/Y/Z (plain,
+    post-increment, pre-decrement, displacement)
+  - I/O: IN, OUT, SBI, CBI, PUSH, POP
+  - Shift/Bit: LSR, ASR, ROR, SWAP, BST, BLD
+  - Program memory: LPM (3 modes), ELPM (3 modes, RAMPZ:Z 24-bit addressing)
+  - Status register: SEI, CLI, SEC, CLC, SEN, CLN, SEZ, CLZ, SEV, CLV,
+    SES, CLS, SEH, CLH, SET, CLT
+  - Misc: NOP, SLEEP, WDR
+- **SSD1306 OLED display**: 128×64 monochrome, horizontal/vertical addressing,
+  column/page windowing, command processing
+- **PCD8544 Nokia LCD**: 84×48 monochrome (Gamebuino Classic), auto-detected,
+  centered in 128×64 framebuffer
+- **Audio output** (3 detection methods):
+  - Timer3 CTC mode (standard Arduboy `tone()`)
+  - Timer1 CTC mode
+  - GPIO bit-bang (PC6 pin toggle via `digitalWrite`)
+- **Peripherals**:
+  - Timer0 (8-bit): Normal, CTC, Fast PWM modes with prescaler, overflow and
+    compare-match interrupts (millis/delay support)
+  - Timer1/Timer3 (16-bit): CTC mode, compare-match toggle, tone generation
+  - SPI master controller (instant transfer, SPIF flag)
+  - ADC with pseudo-random output (xorshift PRNG)
+  - PLL frequency synthesizer (instant lock)
+  - EEPROM controller (1 KB, read/write via EECR)
+- **Arduboy FX**: W25Q128 16 MB SPI flash emulation
+  - Commands: Read Data (0x03), Fast Read (0x0B), JEDEC ID (0x9F),
+    Release Power Down (0xAB), Read Status (0x05), Power Down (0xB9),
+    Write Enable/Disable (0x06/0x04), Page Program (0x02), Sector Erase (0x20)
+  - Lazy allocation (16 MB allocated only on first use)
+  - Auto-detection of `.bin` / `-fx.bin` companion files
+- **Input**: Keyboard (arrows, Z/X) + gamepad (gilrs, cross-platform, hot-plug)
+  with OR-combined merging and analog stick deadzone
+- **Frontend**: minifb window with 6× nearest-neighbor scaling,
+  rodio square wave audio, FPS counter, mute toggle (M key)
+- **Headless mode**: `--headless` with `--frames`, `--press`, `--snapshot`,
+  `--debug` options, Unicode half-block display rendering
+- **Intel HEX parser**: Record types 00 (data), 01 (EOF), 02 (extended segment)
+- **Debug output**: `--debug` flag gates all diagnostic `eprintln!` output

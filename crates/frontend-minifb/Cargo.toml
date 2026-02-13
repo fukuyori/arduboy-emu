@@ -1,0 +1,12 @@
+[package]
+name = "arduboy-frontend"
+version = "0.3.0"
+edition = "2021"
+description = "Desktop frontend for arduboy-emu with display, audio, and gamepad"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+arduboy-core = { path = "../core" }
+minifb = "0.27"
+rodio = "0.17"
+gilrs = "0.11"
