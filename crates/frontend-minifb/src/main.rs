@@ -1,22 +1,22 @@
-//! Arduboy emulator frontend v0.3.0.
+//! Arduboy emulator frontend v0.4.0.
 //!
 //! Provides three execution modes:
 //!
 //! - **GUI mode** (default): Scaled window with stereo audio, keyboard/gamepad input,
-//!   dynamic scale toggle, screenshot, serial monitor.
+//!   dynamic scale toggle, PNG screenshot, GIF recording, EEPROM persistence,
+//!   runtime game browser.
 //! - **Headless mode** (`--headless`): Automated testing with ASCII snapshots.
 //! - **Step mode** (`--step`): Interactive instruction-level debugger.
 //!
-//! ## v0.2.0 features
-//! - Disassembler, breakpoints (`--break`), step mode (`--step`)
-//! - Register/SREG/SP dump (D key in GUI)
-//! - SSD1306 contrast / invert (core)
-//! - Window scale toggle (1–6 keys), fullscreen (F11)
-//! - Screenshot (S key → BMP file)
-//!
-//! ## v0.3.0 features
-//! - 2-channel stereo audio (Timer3→left, Timer1/GPIO→right)
-//! - USB Serial output (captured to stderr with --serial)
+//! ## v0.4.0 features
+//! - `.arduboy` ZIP file loading (info.json + hex + fx bin)
+//! - EEPROM auto-save/load (.eep file alongside hex, 10s interval)
+//! - PNG screenshots at current scale (S key, monochrome at 1x, RGBA at >1x)
+//! - GIF recording (G key toggle, LZW-compressed animated GIF)
+//! - RGB LED / TX / RX LED status in title bar
+//! - FPS limiter toggle (F key: 60fps ↔ unlimited)
+//! - Hot reload (R key)
+//! - Game browser: N=next, P=previous, O=list games in directory
 
 use arduboy_core::{Arduboy, Button, SCREEN_WIDTH, SCREEN_HEIGHT};
 use minifb::{Key, Window, WindowOptions, Scale, ScaleMode};
@@ -212,47 +212,185 @@ fn apply_axis(state: &mut GamepadState, axis: Axis, value: f32) {
     }
 }
 
-// ─── Screenshot (BMP) ───────────────────────────────────────────────────────
+// ─── Screenshot (PNG) ───────────────────────────────────────────────────────
 
-fn save_screenshot(arduboy: &Arduboy, path: &str) -> Result<(), String> {
-    let pixels = arduboy.framebuffer_u32();
-    let w = SCREEN_WIDTH as u32;
-    let h = SCREEN_HEIGHT as u32;
-    let row_size = (w * 3 + 3) & !3;
-    let pixel_data_size = row_size * h;
-    let file_size = 54 + pixel_data_size;
-    let mut data = Vec::with_capacity(file_size as usize);
-    // BMP header
-    data.extend_from_slice(b"BM");
-    data.extend_from_slice(&file_size.to_le_bytes());
-    data.extend_from_slice(&0u16.to_le_bytes());
-    data.extend_from_slice(&0u16.to_le_bytes());
-    data.extend_from_slice(&54u32.to_le_bytes());
-    // DIB header
-    data.extend_from_slice(&40u32.to_le_bytes());
-    data.extend_from_slice(&w.to_le_bytes());
-    data.extend_from_slice(&h.to_le_bytes());
-    data.extend_from_slice(&1u16.to_le_bytes());
-    data.extend_from_slice(&24u16.to_le_bytes());
-    data.extend_from_slice(&0u32.to_le_bytes());
-    data.extend_from_slice(&pixel_data_size.to_le_bytes());
-    data.extend_from_slice(&2835u32.to_le_bytes());
-    data.extend_from_slice(&2835u32.to_le_bytes());
-    data.extend_from_slice(&0u32.to_le_bytes());
-    data.extend_from_slice(&0u32.to_le_bytes());
-    // Pixel data (bottom-up BGR)
-    for y in (0..h as usize).rev() {
-        let mut row_bytes = 0u32;
-        for x in 0..w as usize {
-            let px = pixels[y * SCREEN_WIDTH + x];
-            data.push((px & 0xFF) as u8);
-            data.push(((px >> 8) & 0xFF) as u8);
-            data.push(((px >> 16) & 0xFF) as u8);
-            row_bytes += 3;
+/// Save a screenshot at the current display scale (nearest-neighbor upscale).
+fn save_screenshot_png(arduboy: &Arduboy, path: &str, scale: usize) -> Result<(), String> {
+    if scale <= 1 {
+        // 1x: save efficient monochrome PNG
+        let fb = arduboy.framebuffer_rgba();
+        let pixels: Vec<bool> = (0..SCREEN_WIDTH * SCREEN_HEIGHT)
+            .map(|i| fb[i * 4] > 128)
+            .collect();
+        let png = arduboy_core::png::encode_png_mono(
+            SCREEN_WIDTH as u32, SCREEN_HEIGHT as u32, &pixels);
+        fs::write(path, &png).map_err(|e| format!("{}: {}", path, e))
+    } else {
+        // Scaled: nearest-neighbor upscale to RGBA PNG
+        let fb = arduboy.framebuffer_rgba();
+        let sw = SCREEN_WIDTH * scale;
+        let sh = SCREEN_HEIGHT * scale;
+        let mut scaled = vec![0u8; sw * sh * 4];
+        for y in 0..SCREEN_HEIGHT {
+            for x in 0..SCREEN_WIDTH {
+                let si = (y * SCREEN_WIDTH + x) * 4;
+                let r = fb[si]; let g = fb[si+1]; let b = fb[si+2]; let a = fb[si+3];
+                for sy in 0..scale {
+                    for sx in 0..scale {
+                        let di = ((y * scale + sy) * sw + x * scale + sx) * 4;
+                        scaled[di] = r; scaled[di+1] = g; scaled[di+2] = b; scaled[di+3] = a;
+                    }
+                }
+            }
         }
-        while row_bytes % 4 != 0 { data.push(0); row_bytes += 1; }
+        let png = arduboy_core::png::encode_png(sw as u32, sh as u32, &scaled);
+        fs::write(path, &png).map_err(|e| format!("{}: {}", path, e))
     }
-    fs::write(path, &data).map_err(|e| format!("{}: {}", path, e))
+}
+
+// ─── EEPROM Persistence ─────────────────────────────────────────────────────
+
+fn eeprom_path(hex_path: &str) -> String {
+    let p = std::path::Path::new(hex_path);
+    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("game");
+    let dir = p.parent().unwrap_or(std::path::Path::new("."));
+    dir.join(format!("{}.eep", stem)).to_string_lossy().into_owned()
+}
+
+fn load_eeprom(arduboy: &mut Arduboy, path: &str, debug: bool) {
+    if let Ok(data) = fs::read(path) {
+        arduboy.load_eeprom(&data);
+        if debug { eprintln!("EEPROM loaded: {} ({} bytes)", path, data.len()); }
+    }
+}
+
+fn save_eeprom(arduboy: &Arduboy, path: &str, debug: bool) {
+    let data = arduboy.save_eeprom();
+    // Only save if not all 0xFF (default/empty)
+    if data.iter().any(|&b| b != 0xFF) {
+        if let Err(e) = fs::write(path, &data) {
+            eprintln!("EEPROM save error: {}: {}", path, e);
+        } else if debug {
+            eprintln!("EEPROM saved: {}", path);
+        }
+    }
+}
+
+// ─── File Loading ───────────────────────────────────────────────────────────
+
+struct LoadedGame {
+    hex_str: String,
+    fx_data: Option<Vec<u8>>,
+    title: String,
+    hex_path: String,
+}
+
+fn load_game_file(path: &str, fx_override: Option<&str>, debug: bool) -> Result<LoadedGame, String> {
+    let lower = path.to_lowercase();
+
+    if lower.ends_with(".arduboy") {
+        // Parse .arduboy ZIP
+        let data = fs::read(path).map_err(|e| format!("{}: {}", path, e))?;
+        let ab = arduboy_core::arduboy_file::parse_arduboy(&data)?;
+        if debug {
+            eprintln!("Arduboy file: \"{}\" by {}", ab.title, ab.author);
+            if let Some(ref fx) = ab.fx_data { eprintln!("  FX data: {} bytes", fx.len()); }
+        }
+        Ok(LoadedGame {
+            hex_str: ab.hex.ok_or("No HEX in .arduboy file")?,
+            fx_data: ab.fx_data,
+            title: if ab.title.is_empty() { String::new() } else { ab.title },
+            hex_path: path.to_string(),
+        })
+    } else {
+        // Plain .hex file
+        let hex_str = fs::read_to_string(path).map_err(|e| format!("{}: {}", path, e))?;
+        let fx_data = if let Some(fx_path) = fx_override {
+            Some(fs::read(fx_path).map_err(|e| format!("{}: {}", fx_path, e))?)
+        } else {
+            auto_find_fx(path)
+        };
+        if debug {
+            if let Some(ref fx) = fx_data { eprintln!("FX data: {} bytes", fx.len()); }
+        }
+        Ok(LoadedGame {
+            hex_str,
+            fx_data,
+            title: String::new(),
+            hex_path: path.to_string(),
+        })
+    }
+}
+
+fn auto_find_fx(hex_path: &str) -> Option<Vec<u8>> {
+    let bin = hex_path.replace(".hex", ".bin").replace(".HEX", ".bin");
+    if bin != hex_path && std::path::Path::new(&bin).exists() {
+        return fs::read(&bin).ok();
+    }
+    let dir = std::path::Path::new(hex_path).parent().unwrap_or(std::path::Path::new("."));
+    let stem = std::path::Path::new(hex_path).file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let fx = dir.join(format!("{}-fx.bin", stem));
+    if fx.exists() { fs::read(&fx).ok() } else { None }
+}
+
+// ─── File Browser ──────────────────────────────────────────────────────────
+
+/// Scan a directory for loadable game files (.hex, .arduboy).
+fn scan_game_dir(dir: &str) -> Vec<String> {
+    let dir_path = std::path::Path::new(dir);
+    let mut games: Vec<String> = Vec::new();
+    if let Ok(entries) = fs::read_dir(dir_path) {
+        for entry in entries.flatten() {
+            if let Ok(name) = entry.file_name().into_string() {
+                let lower = name.to_lowercase();
+                if lower.ends_with(".hex") || lower.ends_with(".arduboy") {
+                    games.push(entry.path().to_string_lossy().into_owned());
+                }
+            }
+        }
+    }
+    games.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    games
+}
+
+/// Find the index of a file path in a sorted game list.
+fn find_game_index(games: &[String], current: &str) -> Option<usize> {
+    let current_canon = std::path::Path::new(current)
+        .canonicalize().ok()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| current.to_string());
+    games.iter().position(|g| {
+        let g_canon = std::path::Path::new(g)
+            .canonicalize().ok()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| g.clone());
+        g_canon == current_canon || g == current
+    })
+}
+
+/// Load a game into the emulator, returning the new hex_path and title.
+fn switch_game(
+    arduboy: &mut Arduboy, path: &str, eep_path_old: &str,
+    no_save: bool, debug: bool,
+) -> Result<(String, String, String), String> {
+    // Save current EEPROM before switching
+    if !no_save && arduboy.eeprom_dirty {
+        save_eeprom(arduboy, eep_path_old, debug);
+    }
+    let game = load_game_file(path, None, debug)?;
+    arduboy.reset();
+    arduboy.load_hex(&game.hex_str).map_err(|e| format!("HEX parse: {}", e))?;
+    if let Some(ref fx) = game.fx_data { arduboy.load_fx_data(fx); }
+    let new_eep = eeprom_path(&game.hex_path);
+    if !no_save { load_eeprom(arduboy, &new_eep, debug); }
+    let title = if game.title.is_empty() {
+        std::path::Path::new(path).file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown").to_string()
+    } else {
+        game.title
+    };
+    Ok((game.hex_path, title, new_eep))
 }
 
 // ─── Main ───────────────────────────────────────────────────────────────────
@@ -260,8 +398,12 @@ fn save_screenshot(arduboy: &Arduboy, path: &str) -> Result<(), String> {
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Arduboy Emulator v0.3.0 - Rust");
-        eprintln!("Usage: {} <file.hex> [options]", args[0]);
+        eprintln!("Arduboy Emulator v0.4.0 - Rust");
+        eprintln!("Usage: {} <file.hex|.arduboy> [options]", args[0]);
+        eprintln!();
+        eprintln!("Supported formats:");
+        eprintln!("  .hex             Intel HEX binary");
+        eprintln!("  .arduboy         ZIP archive (info.json + hex + fx bin)");
         eprintln!();
         eprintln!("Options:");
         eprintln!("  --headless           Run without GUI");
@@ -275,18 +417,23 @@ fn main() {
         eprintln!("  --step               Interactive step debugger");
         eprintln!("  --scale N            Initial scale 1-6 (default 6)");
         eprintln!("  --serial             Show USB serial output on stderr");
+        eprintln!("  --no-save            Disable EEPROM auto-save");
         eprintln!();
-        eprintln!("GUI keys: Arrows=D-pad Z=A X=B 1-6=Scale F11=Fullscreen");
-        eprintln!("          S=Screenshot D=RegDump M=Mute Esc=Quit");
+        eprintln!("GUI keys: Arrows=D-pad Z=A X=B  1-6=Scale F11=Fullscreen");
+        eprintln!("          S=Screenshot(PNG) G=GIF record D=RegDump");
+        eprintln!("          M=Mute F=FPS unlimited R=Reload");
+        eprintln!("          N=Next game P=Previous game O=List games");
+        eprintln!("          Esc=Quit");
         std::process::exit(1);
     }
 
-    let hex_path = &args[1];
+    let game_path = &args[1];
     let headless = args.iter().any(|a| a == "--headless");
     let mute = args.iter().any(|a| a == "--mute");
     let debug = args.iter().any(|a| a == "--debug");
     let step_mode = args.iter().any(|a| a == "--step");
     let serial_enabled = args.iter().any(|a| a == "--serial");
+    let no_save = args.iter().any(|a| a == "--no-save");
 
     let initial_scale: usize = args.iter()
         .position(|a| a == "--scale")
@@ -294,11 +441,24 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(6).max(1).min(6);
 
-    let hex_str = fs::read_to_string(hex_path).expect("Failed to read HEX file");
+    let fx_override: Option<&str> = args.iter()
+        .position(|a| a == "--fx")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| s.as_str());
+
+    // Load game (hex or .arduboy)
+    let game = load_game_file(game_path, fx_override, debug)
+        .expect("Failed to load game file");
+
     let mut arduboy = Arduboy::new();
     arduboy.debug = debug;
-    let size = arduboy.load_hex(&hex_str).expect("Failed to parse HEX");
-    if debug { println!("Loaded {} bytes into flash", size); }
+    let size = arduboy.load_hex(&game.hex_str).expect("Failed to parse HEX");
+    if debug { eprintln!("Loaded {} bytes into flash", size); }
+
+    if let Some(ref fx) = game.fx_data {
+        arduboy.load_fx_data(fx);
+        if debug { eprintln!("FX data loaded: {} bytes", fx.len()); }
+    }
 
     // Parse breakpoints
     {
@@ -310,7 +470,7 @@ fn main() {
                     if let Ok(addr) = u16::from_str_radix(s, 16) {
                         let word_addr = addr / 2;
                         arduboy.breakpoints.push(word_addr);
-                        if debug { println!("Breakpoint: 0x{:04X} (word 0x{:04X})", addr, word_addr); }
+                        if debug { eprintln!("Breakpoint: 0x{:04X} (word 0x{:04X})", addr, word_addr); }
                     }
                 }
                 i += 2;
@@ -318,27 +478,10 @@ fn main() {
         }
     }
 
-    // Load FX data
-    let fx_path: Option<String> = args.iter()
-        .position(|a| a == "--fx")
-        .and_then(|i| args.get(i + 1))
-        .map(|s| s.clone())
-        .or_else(|| {
-            let bin = hex_path.replace(".hex", ".bin").replace(".HEX", ".bin");
-            if bin != *hex_path && std::path::Path::new(&bin).exists() { return Some(bin); }
-            let dir = std::path::Path::new(hex_path).parent().unwrap_or(std::path::Path::new("."));
-            let stem = std::path::Path::new(hex_path).file_stem().and_then(|s| s.to_str()).unwrap_or("");
-            let fx = dir.join(format!("{}-fx.bin", stem));
-            if fx.exists() { Some(fx.to_string_lossy().into_owned()) } else { None }
-        });
-    if let Some(ref path) = fx_path {
-        match fs::read(path) {
-            Ok(bin) => {
-                if debug { println!("FX data: {} ({} bytes)", path, bin.len()); }
-                arduboy.load_fx_data(&bin);
-            }
-            Err(e) => eprintln!("Warning: FX data {}: {}", path, e),
-        }
+    // EEPROM: auto-load
+    let eep_path = eeprom_path(&game.hex_path);
+    if !no_save {
+        load_eeprom(&mut arduboy, &eep_path, debug);
     }
 
     if step_mode {
@@ -346,19 +489,33 @@ fn main() {
     } else if headless {
         run_headless(&args, &mut arduboy, serial_enabled);
     } else {
-        run_gui(&mut arduboy, mute, debug, initial_scale, serial_enabled);
+        run_gui(&mut arduboy, mute, debug, initial_scale, serial_enabled,
+                &game.hex_path, &game.title, no_save);
+    }
+
+    // EEPROM: auto-save on exit
+    if !no_save && arduboy.eeprom_dirty {
+        save_eeprom(&arduboy, &eep_path, debug);
     }
 }
 
 // ─── GUI Mode ───────────────────────────────────────────────────────────────
 
-fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale: usize, serial_enabled: bool) {
+fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale: usize,
+           serial_enabled: bool, hex_path: &str, game_title: &str, no_save: bool)
+{
+    let mut cur_hex_path = hex_path.to_string();
     let mut scale = initial_scale;
     let mut scaled_w = SCREEN_WIDTH * scale;
     let mut scaled_h = SCREEN_HEIGHT * scale;
+    let make_title = |game_t: &str| -> String {
+        if game_t.is_empty() { "Arduboy v0.4.0".to_string() }
+        else { format!("Arduboy v0.4.0 - {}", game_t) }
+    };
+    let mut title_base = make_title(game_title);
 
     let mut window = Window::new(
-        "Arduboy Emulator v0.3.0", scaled_w, scaled_h,
+        &title_base, scaled_w, scaled_h,
         WindowOptions {
             scale: Scale::X1,
             scale_mode: ScaleMode::AspectRatioStretch,
@@ -386,10 +543,32 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
     let mut prev_m = false;
     let mut prev_s = false;
     let mut prev_d = false;
+    let mut prev_f = false;
+    let mut prev_g = false;
+    let mut prev_r = false;
     let mut prev_f11 = false;
     let mut fullscreen = false;
+    let mut fps_unlimited = false;
     let mut screenshot_n = 0u32;
     let mut prev_num = [false; 6];
+
+    // GIF recording state
+    let mut gif_encoder: Option<arduboy_core::gif::GifEncoder> = None;
+    let mut gif_file_n = 0u32;
+
+    // EEPROM auto-save timer
+    let mut eep_path = eeprom_path(&cur_hex_path);
+    let mut last_eeprom_save = Instant::now();
+
+    // File browser state
+    let game_dir = std::path::Path::new(&cur_hex_path)
+        .parent().unwrap_or(std::path::Path::new("."))
+        .to_string_lossy().into_owned();
+    let mut game_list = scan_game_dir(&game_dir);
+    let mut game_index = find_game_index(&game_list, &cur_hex_path).unwrap_or(0);
+    let mut prev_n = false;
+    let mut prev_p = false;
+    let mut prev_o = false;
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         if let Some(ref mut g) = gilrs { poll_gamepad(g, &mut gp, debug); }
@@ -407,10 +586,10 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
                 scaled_h = SCREEN_HEIGHT * scale;
                 scaled_buf.resize(scaled_w * scaled_h, 0);
                 window = Window::new(
-                    "Arduboy Emulator v0.3.0", scaled_w, scaled_h,
+                    &title_base, scaled_w, scaled_h,
                     WindowOptions { scale: Scale::X1, scale_mode: ScaleMode::AspectRatioStretch, resize: true, ..Default::default() },
                 ).expect("window");
-                window.set_target_fps(60);
+                if fps_unlimited { window.set_target_fps(0); } else { window.set_target_fps(60); }
             }
         }
         prev_num = num;
@@ -429,10 +608,24 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
             scaled_buf.resize(scaled_w * scaled_h, 0);
             let mut opts = WindowOptions { scale: Scale::X1, scale_mode: ScaleMode::AspectRatioStretch, resize: true, ..Default::default() };
             if fullscreen { opts.borderless = true; }
-            window = Window::new("Arduboy Emulator v0.3.0", scaled_w, scaled_h, opts).expect("window");
-            window.set_target_fps(60);
+            window = Window::new(&title_base, scaled_w, scaled_h, opts).expect("window");
+            if fps_unlimited { window.set_target_fps(0); } else { window.set_target_fps(60); }
         }
         prev_f11 = f11;
+
+        // FPS unlimited toggle (F)
+        let fk = window.is_key_down(Key::F);
+        if fk && !prev_f {
+            fps_unlimited = !fps_unlimited;
+            if fps_unlimited {
+                window.set_target_fps(0);
+                eprintln!("FPS: unlimited");
+            } else {
+                window.set_target_fps(60);
+                eprintln!("FPS: 60");
+            }
+        }
+        prev_f = fk;
 
         // Mute (M)
         let m = window.is_key_down(Key::M);
@@ -448,16 +641,122 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
         }
         prev_m = m;
 
-        // Screenshot (S)
+        // Screenshot (S) — PNG at current scale
         let s = window.is_key_down(Key::S);
         if s && !prev_s {
-            let f = format!("screenshot_{:04}.bmp", screenshot_n);
-            match save_screenshot(arduboy, &f) {
-                Ok(()) => { eprintln!("Screenshot: {}", f); screenshot_n += 1; }
+            let cur_s = scaled_w / SCREEN_WIDTH;
+            let f = format!("screenshot_{:04}_{}x.png", screenshot_n, cur_s);
+            match save_screenshot_png(arduboy, &f, cur_s) {
+                Ok(()) => { eprintln!("Screenshot: {} ({}x)", f, cur_s); screenshot_n += 1; }
                 Err(e) => eprintln!("Screenshot error: {}", e),
             }
         }
         prev_s = s;
+
+        // GIF recording toggle (G)
+        let gk = window.is_key_down(Key::G);
+        if gk && !prev_g {
+            if let Some(encoder) = gif_encoder.take() {
+                // Stop recording
+                let frames = encoder.frame_count();
+                let gif_data = encoder.finish();
+                let fname = format!("recording_{:04}.gif", gif_file_n);
+                match fs::write(&fname, &gif_data) {
+                    Ok(()) => eprintln!("GIF saved: {} ({} frames, {} bytes)",
+                        fname, frames, gif_data.len()),
+                    Err(e) => eprintln!("GIF save error: {}", e),
+                }
+                gif_file_n += 1;
+            } else {
+                // Start recording
+                gif_encoder = Some(arduboy_core::gif::GifEncoder::new(
+                    SCREEN_WIDTH as u16, SCREEN_HEIGHT as u16, 2));
+                eprintln!("GIF recording started (press G to stop)");
+            }
+        }
+        prev_g = gk;
+
+        // Reload (R)
+        let rk = window.is_key_down(Key::R);
+        if rk && !prev_r {
+            // Save EEPROM before reload
+            if !no_save && arduboy.eeprom_dirty {
+                save_eeprom(arduboy, &eep_path, debug);
+            }
+            // Reload the game file
+            match load_game_file(&cur_hex_path, None, debug) {
+                Ok(game) => {
+                    arduboy.reset();
+                    if let Err(e) = arduboy.load_hex(&game.hex_str) {
+                        eprintln!("Reload error: {}", e);
+                    } else {
+                        if let Some(ref fx) = game.fx_data { arduboy.load_fx_data(fx); }
+                        if !no_save { load_eeprom(arduboy, &eep_path, debug); }
+                        frame_count = 0;
+                        eprintln!("Reloaded: {}", cur_hex_path);
+                    }
+                }
+                Err(e) => eprintln!("Reload error: {}", e),
+            }
+        }
+        prev_r = rk;
+
+        // File browser: O = list games, N = next, P = previous
+        let ok = window.is_key_down(Key::O);
+        if ok && !prev_o {
+            // Rescan directory and print game list
+            game_list = scan_game_dir(&game_dir);
+            game_index = find_game_index(&game_list, &cur_hex_path).unwrap_or(0);
+            eprintln!("--- Games in {} ({} found) ---", game_dir, game_list.len());
+            for (i, g) in game_list.iter().enumerate() {
+                let marker = if i == game_index { " <<" } else { "" };
+                let name = std::path::Path::new(g).file_name()
+                    .and_then(|s| s.to_str()).unwrap_or(g);
+                eprintln!("  {:3}. {}{}", i + 1, name, marker);
+            }
+            eprintln!("---");
+        }
+        prev_o = ok;
+
+        let nk = window.is_key_down(Key::N);
+        if nk && !prev_n && !game_list.is_empty() {
+            let next_idx = (game_index + 1) % game_list.len();
+            let path = game_list[next_idx].clone();
+            match switch_game(arduboy, &path, &eep_path, no_save, debug) {
+                Ok((hp, title, ep)) => {
+                    cur_hex_path = hp; eep_path = ep;
+                    title_base = make_title(&title);
+                    game_index = next_idx;
+                    frame_count = 0;
+                    window.set_title(&title_base);
+                    let name = std::path::Path::new(&path).file_name()
+                        .and_then(|s| s.to_str()).unwrap_or(&path);
+                    eprintln!("Loaded [{}/{}]: {}", game_index + 1, game_list.len(), name);
+                }
+                Err(e) => eprintln!("Load error: {}", e),
+            }
+        }
+        prev_n = nk;
+
+        let pk = window.is_key_down(Key::P);
+        if pk && !prev_p && !game_list.is_empty() {
+            let prev_idx = if game_index == 0 { game_list.len() - 1 } else { game_index - 1 };
+            let path = game_list[prev_idx].clone();
+            match switch_game(arduboy, &path, &eep_path, no_save, debug) {
+                Ok((hp, title, ep)) => {
+                    cur_hex_path = hp; eep_path = ep;
+                    title_base = make_title(&title);
+                    game_index = prev_idx;
+                    frame_count = 0;
+                    window.set_title(&title_base);
+                    let name = std::path::Path::new(&path).file_name()
+                        .and_then(|s| s.to_str()).unwrap_or(&path);
+                    eprintln!("Loaded [{}/{}]: {}", game_index + 1, game_list.len(), name);
+                }
+                Err(e) => eprintln!("Load error: {}", e),
+            }
+        }
+        prev_p = pk;
 
         // Reg dump (D)
         let d = window.is_key_down(Key::D);
@@ -492,10 +791,17 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
             }
         }
 
+        // GIF recording: capture frame
+        if let Some(ref mut enc) = gif_encoder {
+            let fb = arduboy.framebuffer_rgba();
+            let mono: Vec<bool> = (0..SCREEN_WIDTH * SCREEN_HEIGHT)
+                .map(|i| fb[i * 4] > 128)
+                .collect();
+            enc.add_frame_mono(&mono);
+        }
+
         if !muted {
             let (lh, rh) = arduboy.get_audio_tone();
-            // If sample-accurate GPIO audio edges were recorded this frame,
-            // render them to PCM and push to ring buffer (bypassing frequency synth)
             if arduboy.audio_buf.has_audio() {
                 arduboy.audio_buf.render_samples(
                     &mut pcm_buf,
@@ -504,20 +810,24 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
                     AUDIO_VOLUME,
                 );
                 if let Ok(mut ring) = audio_ring.lock() {
-                    // Limit buffer to avoid latency buildup
-                    let max_buf = AUDIO_SAMPLE_RATE as usize / 5; // ~200ms
+                    let max_buf = AUDIO_SAMPLE_RATE as usize / 5;
                     if ring.len() < max_buf {
                         ring.extend(pcm_buf.iter());
                     }
                 }
-                // Timer tones are mixed via frequency fallback in the source
                 freq_l.store(0.0f32.to_bits(), Ordering::Relaxed);
                 freq_r.store(0.0f32.to_bits(), Ordering::Relaxed);
             } else {
-                // No GPIO edges: use timer frequency synthesis
                 freq_l.store(lh.to_bits(), Ordering::Relaxed);
                 freq_r.store(rh.to_bits(), Ordering::Relaxed);
             }
+        }
+
+        // EEPROM auto-save (every 10 seconds if dirty)
+        if !no_save && arduboy.eeprom_dirty && last_eeprom_save.elapsed() >= Duration::from_secs(10) {
+            save_eeprom(arduboy, &eep_path, debug);
+            arduboy.eeprom_dirty = false;
+            last_eeprom_save = Instant::now();
         }
 
         // Render
@@ -543,14 +853,40 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
             if lh > 0.0 { ti.push_str(&format!(" L:{:.0}Hz", lh)); }
             if rh > 0.0 { ti.push_str(&format!(" R:{:.0}Hz", rh)); }
             let ms = if muted { " [MUTE]" } else { "" };
-            window.set_title(&format!("Arduboy v0.3.0 - {:.0} FPS{}{} ({}x)", fps, ti, ms, cur_scale));
+            let fs = if fps_unlimited { " [∞]" } else { "" };
+            let rec = if gif_encoder.is_some() { " [REC]" } else { "" };
+            // LED status
+            let (lr, lg, lb) = arduboy.get_led_state();
+            let led = if lr > 0 || lg > 0 || lb > 0 {
+                format!(" LED({},{},{})", lr, lg, lb)
+            } else { String::new() };
+            let tx = if arduboy.led_tx { " TX" } else { "" };
+            let rx = if arduboy.led_rx { " RX" } else { "" };
+            window.set_title(&format!("{} - {:.0} FPS{}{}{}{}{}{}{} ({}x)",
+                title_base, fps, ti, ms, fs, rec, led, tx, rx, cur_scale));
             fps_frames = 0;
             last_fps_time = Instant::now();
         }
     }
+
+    // Final GIF save if still recording
+    if let Some(encoder) = gif_encoder.take() {
+        let frames = encoder.frame_count();
+        let gif_data = encoder.finish();
+        let fname = format!("recording_{:04}.gif", gif_file_n);
+        if let Ok(()) = fs::write(&fname, &gif_data) {
+            eprintln!("GIF saved on exit: {} ({} frames, {} bytes)", fname, frames, gif_data.len());
+        }
+    }
+
+    // Final EEPROM save
+    if !no_save && arduboy.eeprom_dirty {
+        save_eeprom(arduboy, &eep_path, debug);
+    }
+
     if debug {
         let e = start_time.elapsed().as_secs_f64();
-        println!("{} frames in {:.1}s ({:.1} FPS), {} cycles", frame_count, e, frame_count as f64 / e, arduboy.cpu.tick);
+        eprintln!("{} frames in {:.1}s ({:.1} FPS), {} cycles", frame_count, e, frame_count as f64 / e, arduboy.cpu.tick);
     }
 }
 

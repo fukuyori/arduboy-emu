@@ -1,6 +1,6 @@
 //! # arduboy-core
 //!
-//! Cycle-accurate emulation core for the Arduboy handheld game console (v0.3.0).
+//! Cycle-accurate emulation core for the Arduboy handheld game console (v0.4.0).
 //!
 //! Emulates the ATmega32u4 microcontroller (16 MHz, 32 KB flash, 2.5 KB SRAM,
 //! 1 KB EEPROM) along with peripheral hardware: SSD1306 OLED display, PCD8544
@@ -36,6 +36,9 @@ pub mod hex;
 pub mod peripherals;
 pub mod disasm;
 pub mod audio_buffer;
+pub mod arduboy_file;
+pub mod png;
+pub mod gif;
 
 pub use cpu::Cpu;
 pub use display::Ssd1306;
@@ -157,6 +160,14 @@ pub struct Arduboy {
     usb_configured: bool,
     /// Sample-accurate audio waveform buffer
     pub audio_buf: AudioBuffer,
+    /// RGB LED state: (red, green, blue) brightness 0–255
+    pub led_rgb: (u8, u8, u8),
+    /// TX LED state (PD5, active-low)
+    pub led_tx: bool,
+    /// RX LED state (PB0, active-low)
+    pub led_rx: bool,
+    /// EEPROM dirty flag (true if modified since last save)
+    pub eeprom_dirty: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -222,6 +233,10 @@ impl Arduboy {
             usb_uenum: 0,
             usb_configured: false,
             audio_buf: AudioBuffer::new(),
+            led_rgb: (0, 0, 0),
+            led_tx: false,
+            led_rx: false,
+            eeprom_dirty: false,
         };
         // Initialize SP to top of SRAM
         let sp = (DATA_SIZE - 1) as u16;
@@ -291,6 +306,10 @@ impl Arduboy {
         self.serial_buf.clear();
         self.usb_uenum = 0;
         self.usb_configured = false;
+        self.led_rgb = (0, 0, 0);
+        self.led_tx = false;
+        self.led_rx = false;
+        // Note: eeprom_dirty is NOT cleared on reset (tracks unsaved changes)
         // Note: FX flash data is NOT cleared on reset (persistent storage)
         // Note: breakpoints are NOT cleared on reset
     }
@@ -463,6 +482,26 @@ impl Arduboy {
         std::mem::take(&mut self.serial_buf)
     }
 
+    /// Save EEPROM contents to a byte vector.
+    pub fn save_eeprom(&self) -> Vec<u8> {
+        self.mem.eeprom.clone()
+    }
+
+    /// Load EEPROM contents from a byte slice.
+    pub fn load_eeprom(&mut self, data: &[u8]) {
+        let len = data.len().min(EEPROM_SIZE);
+        self.mem.eeprom[..len].copy_from_slice(&data[..len]);
+        self.eeprom_dirty = false;
+    }
+
+    /// Get current RGB LED state as (red, green, blue).
+    ///
+    /// Arduboy LED pins: Red=PB6(OC1B), Green=PB7(OC1C), Blue=PB5(OC1A).
+    /// Returns PWM duty or digital on/off approximation.
+    pub fn get_led_state(&self) -> (u8, u8, u8) {
+        self.led_rgb
+    }
+
     /// Read from data space with peripheral hooks
     pub fn read_data(&mut self, addr: u16) -> u8 {
         let a = addr as usize;
@@ -565,6 +604,13 @@ impl Arduboy {
                         }
                     }
                     self.mem.data[a] = value;
+                    // Track LED states from PORTB
+                    // RX LED = PB0 (active-low)
+                    self.led_rx = value & (1 << 0) == 0;
+                    // RGB LED digital: Blue=PB5, Red=PB6, Green=PB7 (active-high)
+                    self.led_rgb.2 = if value & (1 << 5) != 0 { 255 } else { 0 }; // Blue
+                    self.led_rgb.0 = if value & (1 << 6) != 0 { 255 } else { 0 }; // Red
+                    self.led_rgb.1 = if value & (1 << 7) != 0 { 255 } else { 0 }; // Green
                 }
                 return;
             }
@@ -600,6 +646,8 @@ impl Arduboy {
             }
             0x2B => { // PORTD
                 if a < self.mem.data.len() { self.mem.data[a] = value; }
+                // TX LED = PD5 (active-low)
+                self.led_tx = value & (1 << 5) == 0;
                 // FX Flash CS = PD2: detect rising edge (deselect)
                 if self.fx_flash.loaded {
                     let new_cs_high = value & (1 << 2) != 0;
@@ -709,6 +757,7 @@ impl Arduboy {
                 let data_val = self.mem.data[0x40];
                 if (ea as usize) < self.mem.eeprom.len() {
                     self.mem.eeprom[ea as usize] = data_val;
+                    self.eeprom_dirty = true;
                 }
             }
             if a < self.mem.data.len() { self.mem.data[a] = value & !2; }

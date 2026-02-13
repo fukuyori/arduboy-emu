@@ -1,6 +1,6 @@
 # arduboy-emu
 
-**v0.3.0** — Rust で書かれたサイクル精度の Arduboy エミュレータです。
+**v0.4.0** — Rust で書かれたサイクル精度の Arduboy エミュレータです。
 
 ATmega32u4 マイコン（16 MHz）をディスプレイ、オーディオ、ゲームパッド、Arduboy FX フラッシュ対応でエミュレートします。
 
@@ -17,9 +17,16 @@ ATmega32u4 マイコン（16 MHz）をディスプレイ、オーディオ、ゲ
 - **Arduboy FX** — W25Q128 16 MB SPI フラッシュエミュレーション（Read、Fast Read、JEDEC ID、消去、書込）
 - **ペリフェラル** — Timer0/1/3/4、SPI、ADC、PLL、EEPROM、USB Serial 出力
 - **デバッガ** — 逆アセンブラ、ブレークポイント、ステップ実行、レジスタダンプ
-- **動的表示** — スケール 1×–6× 切替、フルスクリーン、BMP スクリーンショット
+- **動的表示** — スケール 1×–6× 切替、フルスクリーン、PNG スクリーンショット（現在の倍率で保存）
 - **USB Serial** — UEDATX レジスタ経由で `Serial.print()` 出力をキャプチャ
 - **ヘッドレスモード** — フレームスナップショットと診断情報による自動テスト
+- **.arduboy ファイル対応** — ZIP アーカイブ（info.json + hex + FX bin）を直接読込
+- **EEPROM 永続化** — ゲーム横に .eep ファイルとして自動保存/復元
+- **GIF 録画** — ゲームプレイをアニメーション GIF で録画（G キーでトグル、LZW 圧縮）
+- **LED 状態表示** — RGB LED、TX LED、RX LED の状態をタイトルバーに表示
+- **FPS 制御** — 60fps 固定と無制限を切替（F キー）
+- **ホットリロード** — 実行中にゲームファイルを再読込（R キー）
+- **ゲームブラウザ** — N/P キーでディレクトリ内のゲームを切替、O で一覧表示
 
 ## ビルド
 
@@ -35,7 +42,7 @@ cargo run --release -- game.hex
 ## 使い方
 
 ```
-arduboy-emu <file.hex> [オプション]
+arduboy-emu <file.hex|file.arduboy> [オプション]
 
 オプション:
   --fx <file.bin>    FX フラッシュデータを読み込む
@@ -45,7 +52,19 @@ arduboy-emu <file.hex> [オプション]
   --frames N         N フレーム実行（ヘッドレス、デフォルト 60）
   --press N          フレーム N で A ボタンを押す（ヘッドレス）
   --snapshot F       フレーム F でディスプレイを出力（複数指定可）
+  --break <addr>     16進バイトアドレスにブレークポイント設定（複数指定可）
+  --step             対話式ステップデバッガ
+  --scale N          初期スケール 1-6（デフォルト 6）
+  --serial           USB Serial 出力を stderr に表示
+  --no-save          EEPROM 自動保存を無効化
 ```
+
+### 対応ファイル形式
+
+| 形式 | 説明 |
+|------|------|
+| `.hex` | Intel HEX バイナリ（同名の `.bin` / `-fx.bin` を FX データとして自動検出）|
+| `.arduboy` | ZIP アーカイブ（`info.json`、`.hex`、FX `.bin` を含む）|
 
 ### FX フラッシュの自動検出
 
@@ -55,17 +74,53 @@ arduboy-emu <file.hex> [オプション]
 game.hex + game.bin       → 自動読込
 game.hex + game-fx.bin    → 自動読込
 game.hex --fx custom.bin  → 明示的なパス指定
+game.arduboy              → ZIP から hex + fx を自動抽出
+```
+
+### EEPROM 永続化
+
+EEPROM はゲームファイル横に `.eep` ファイルとして自動保存されます：
+
+```
+game.hex → game.eep（10秒ごと + 終了時に自動保存）
+```
+
+`--no-save` で無効化できます。ホットリロード（R キー）でも EEPROM は保持されます。
+
+### ゲームブラウザ
+
+**O** キーでゲームファイルのあるディレクトリ内の `.hex`/`.arduboy` ファイル一覧を表示し、
+**N**（次）/ **P**（前）で切り替えられます。EEPROM はゲームごとに自動保存/復元されます。
+
+```
+--- Games in ./roms (5 found) ---
+    1. arcodia.hex
+    2. breakout.hex <<
+    3. circuit-dude.arduboy
+    4. nineteen44.hex
+    5. starduino.hex
+---
 ```
 
 ## 操作方法
 
-| Arduboy | キーボード | Xbox コントローラー          | PlayStation                   |
-|---------|------------|------------------------------|-------------------------------|
-| 十字キー | 矢印キー  | 十字キー / 左スティック       | 十字キー / 左スティック        |
-| A       | Z          | X, Y, LB, RB, LT, RT, Select | □, △, L1, R1, L2, R2, Select |
-| B       | X          | A, B, Start                  | ×, ○, Start                   |
-| ミュート | M          | —                            | —                             |
-| 終了    | Escape     | —                            | —                             |
+| Arduboy       | キーボード | Xbox コントローラー          | PlayStation                   |
+|---------------|------------|------------------------------|-------------------------------|
+| 十字キー      | 矢印キー   | 十字キー / 左スティック       | 十字キー / 左スティック        |
+| A             | Z          | X, Y, LB, RB, LT, RT, Select | □, △, L1, R1, L2, R2, Select |
+| B             | X          | A, B, Start                  | ×, ○, Start                   |
+| スケール 1×–6× | 1–6 キー  | —                            | —                             |
+| フルスクリーン | F11        | —                            | —                             |
+| スクリーンショット | S      | —                            | — (現在の倍率で PNG 保存)      |
+| GIF 録画      | G          | —                            | —                             |
+| 次のゲーム    | N          | —                            | —                             |
+| 前のゲーム    | P          | —                            | —                             |
+| ゲーム一覧    | O          | —                            | —                             |
+| リロード      | R          | —                            | —                             |
+| FPS 無制限    | F          | —                            | — (60fps ↔ 無制限)            |
+| レジスタダンプ | D          | —                            | —                             |
+| ミュート      | M          | —                            | —                             |
+| 終了          | Escape     | —                            | —                             |
 
 キーボードとゲームパッドの入力は OR 結合されるため、同時に使用できます。
 
@@ -85,6 +140,9 @@ arduboy-emu/
 │   │       ├── hex.rs           # Intel HEX パーサ
 │   │       ├── disasm.rs        # 逆アセンブラ（デバッガ用）
 │   │       ├── audio_buffer.rs  # サンプル精度波形バッファ
+│   │       ├── arduboy_file.rs  # .arduboy ZIP ファイルパーサ
+│   │       ├── png.rs           # PNG エンコーダ（依存なし）
+│   │       ├── gif.rs           # アニメーション GIF エンコーダ（LZW 圧縮）
 │   │       └── peripherals/
 │   │           ├── timer8.rs    # Timer/Counter0（millis/delay）
 │   │           ├── timer16.rs   # Timer/Counter1 & 3（オーディオトーン）

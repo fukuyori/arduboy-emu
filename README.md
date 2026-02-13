@@ -1,6 +1,6 @@
 # arduboy-emu
 
-**v0.3.0** — A cycle-accurate Arduboy emulator written in Rust.
+**v0.4.0** — A cycle-accurate Arduboy emulator written in Rust.
 
 Emulates the ATmega32u4 microcontroller at 16 MHz with display, audio, gamepad, and Arduboy FX flash support.
 
@@ -17,9 +17,16 @@ Emulates the ATmega32u4 microcontroller at 16 MHz with display, audio, gamepad, 
 - **Arduboy FX** — W25Q128 16 MB SPI flash emulation (Read, Fast Read, JEDEC ID, erase, program)
 - **Peripherals** — Timer0/1/3/4, SPI, ADC, PLL, EEPROM, USB Serial output
 - **Debugger** — Disassembler, breakpoints, step-by-step execution, register dump
-- **Dynamic display** — Scale 1×–6× toggle, fullscreen, BMP screenshots
+- **Dynamic display** — Scale 1×–6× toggle, fullscreen, PNG screenshots
 - **USB Serial** — Captures `Serial.print()` output via UEDATX register interception
 - **Headless mode** — Automated testing with frame snapshots and diagnostics
+- **.arduboy file support** — Load ZIP archives with info.json, hex, and FX bin
+- **EEPROM persistence** — Auto-save/load to .eep file alongside game
+- **GIF recording** — Capture gameplay as animated GIF (G key toggle, LZW compressed)
+- **LED status** — RGB LED, TX LED, RX LED state displayed in title bar
+- **FPS control** — Toggle between 60fps locked and unlimited (F key)
+- **Hot reload** — Reload current game file without restart (R key)
+- **Game browser** — N/P keys to cycle through games in directory, O to list
 
 ## Building
 
@@ -35,7 +42,7 @@ cargo run --release -- game.hex
 ## Usage
 
 ```
-arduboy-emu <file.hex> [options]
+arduboy-emu <file.hex|file.arduboy> [options]
 
 Options:
   --fx <file.bin>    Load FX flash data
@@ -49,7 +56,15 @@ Options:
   --step             Interactive step-by-step debugger
   --scale N          Initial display scale 1-6 (default 6)
   --serial           Show USB serial output on stderr
+  --no-save          Disable EEPROM auto-save
 ```
+
+### File Formats
+
+| Format | Description |
+|--------|------------|
+| `.hex` | Intel HEX binary (auto-detects companion `.bin` / `-fx.bin` for FX data) |
+| `.arduboy` | ZIP archive containing `info.json`, `.hex`, and optional FX `.bin` |
 
 ### FX Flash Auto-Detection
 
@@ -59,19 +74,50 @@ FX data is loaded automatically if a matching `.bin` file exists alongside the `
 game.hex + game.bin       → auto-loaded
 game.hex + game-fx.bin    → auto-loaded
 game.hex --fx custom.bin  → explicit path
+game.arduboy              → hex + fx extracted from ZIP
+```
+
+### EEPROM Persistence
+
+EEPROM is automatically saved to a `.eep` file alongside the game:
+
+```
+game.hex → game.eep (auto-saved every 10s + on exit)
+```
+
+Use `--no-save` to disable. EEPROM data survives hot reload (R key).
+
+### Game Browser
+
+Press **O** to list all `.hex` and `.arduboy` files in the game's directory, then use **N** (next) and **P** (previous) to switch between them. EEPROM state is saved and loaded per game automatically.
+
+```
+--- Games in ./roms (5 found) ---
+    1. arcodia.hex
+    2. breakout.hex <<
+    3. circuit-dude.arduboy
+    4. nineteen44.hex
+    5. starduino.hex
+---
 ```
 
 ## Controls
 
-| Arduboy    | Keyboard   | Xbox Controller             | PlayStation                   |
-|------------|------------|-----------------------------|-------------------------------|
-| D-pad      | Arrow keys | D-pad / Left stick          | D-pad / Left stick            |
-| A          | Z          | X, Y, LB, RB, LT, RT, Select | □, △, L1, R1, L2, R2, Select |
-| B          | X          | A, B, Start                 | ×, ○, Start                   |
-| Scale 1×–6×| 1–6 keys   | —                           | —                             |
-| Fullscreen | F11        | —                           | —                             |
-| Screenshot | S          | —                           | —                             |
-| Reg dump   | D          | —                           | —                             |
+| Arduboy     | Keyboard   | Xbox Controller             | PlayStation                   |
+|-------------|------------|-----------------------------|-------------------------------|
+| D-pad       | Arrow keys | D-pad / Left stick          | D-pad / Left stick            |
+| A           | Z          | X, Y, LB, RB, LT, RT, Select | □, △, L1, R1, L2, R2, Select |
+| B           | X          | A, B, Start                 | ×, ○, Start                   |
+| Scale 1×–6× | 1–6 keys   | —                           | —                             |
+| Fullscreen  | F11        | —                           | —                             |
+| Screenshot  | S          | —                           | — (PNG at current scale)      |
+| GIF record  | G          | —                           | —                             |
+| Next game   | N          | —                           | —                             |
+| Prev game   | P          | —                           | —                             |
+| List games  | O          | —                           | —                             |
+| Reload      | R          | —                           | —                             |
+| FPS toggle  | F          | —                           | — (60fps ↔ unlimited)         |
+| Reg dump    | D          | —                           | —                             |
 | Mute       | M          | —                           | —                             |
 | Quit       | Escape     | —                           | —                             |
 
@@ -93,6 +139,9 @@ arduboy-emu/
 │   │       ├── hex.rs           # Intel HEX parser
 │   │       ├── disasm.rs        # Instruction disassembler (debugger)
 │   │       ├── audio_buffer.rs  # Sample-accurate waveform buffer
+│   │       ├── arduboy_file.rs  # .arduboy ZIP file parser
+│   │       ├── png.rs           # PNG encoder (no dependencies)
+│   │       ├── gif.rs           # Animated GIF encoder (LZW compressed)
 │   │       └── peripherals/
 │   │           ├── timer8.rs    # Timer/Counter0 (millis/delay)
 │   │           ├── timer16.rs   # Timer/Counter1 & 3 (audio tone)

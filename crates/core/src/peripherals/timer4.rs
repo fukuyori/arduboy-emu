@@ -29,8 +29,7 @@ pub struct Timer4 {
     dt4: u8,
     /// Interrupt mask (TIMSK4)
     timsk: u8,
-    /// Interrupt flag (TIFR4)
-    tifr: u8,
+
     /// Clock select (CS43:CS40)
     cs: u8,
     /// Prescaler value derived from CS bits
@@ -61,7 +60,7 @@ impl Timer4 {
             tcnt: 0, tc4h: 0,
             ocr_a: 0, ocr_b: 0, ocr_c: 0xFF, ocr_d: 0,
             tccr_a: 0, tccr_b: 0, tccr_c: 0, tccr_d: 0, tccr_e: 0,
-            dt4: 0, timsk: 0, tifr: 0,
+            dt4: 0, timsk: 0,
             cs: 0, prescale: 0, tick: 0,
             wgm: 0,
             tov: 0, ocf_a: 0, ocf_b: 0, ocf_d: 0,

@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2025-02-13
+
+### Added
+
+- **`.arduboy` file support**: ZIP archive parser with `info.json` metadata
+  extraction, automatic `.hex` and FX `.bin` file detection
+  - Minimal ZIP reader (stored + deflate) with RFC 1951 inflate
+  - Simple JSON string value extractor for title/author
+- **EEPROM persistence**: Automatic save/load to `.eep` file alongside game
+  - Auto-save every 10 seconds when dirty, auto-load on startup
+  - `--no-save` flag to disable persistence
+  - Saved before hot-reload and game switch
+- **GIF recording**: G key toggles recording, LZW-compressed animated GIF
+  - Custom GIF89a encoder with Netscape infinite loop extension
+  - 2-color (monochrome) palette for Arduboy's 1-bit display
+  - Saved on stop or window close (`recording_NNNN.gif`)
+- **PNG screenshots at any scale**: S key saves at current display scale
+  - 1× scale: efficient 8-bit grayscale PNG (monochrome)
+  - 2×–6× scale: RGBA PNG with nearest-neighbor upscale
+  - Custom PNG encoder (no dependencies, stored deflate blocks)
+- **RGB LED state tracking**: Red (PB6), Green (PB7), Blue (PB5) from PORTB
+  - TX LED (PD5, active-low) and RX LED (PB0, active-low) detection
+  - LED state displayed in window title bar
+- **FPS limiter toggle**: F key switches between 60fps and unlimited
+- **Game browser**: Scan current directory for `.hex`/`.arduboy` files
+  - N key = load next game, P key = load previous game
+  - O key = print numbered file list to terminal
+  - Alphabetical sorting, circular navigation
+  - EEPROM saved/loaded per game automatically
+- **Hot reload**: R key reloads current game file from disk
+
+### Changed
+
+- Screenshot format: BMP → PNG (smaller files, widely supported)
+- Screenshot naming: `screenshot_NNNN_Sx.png` includes scale factor
+- Window title shows LED state, recording indicator, FPS mode
+
 ## [0.3.0] - 2025-02-13
 
 ### Added
