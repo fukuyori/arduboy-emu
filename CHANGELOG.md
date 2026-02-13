@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2025-02-13
+
+### Added
+
+- **ATmega328P CPU support** — `--cpu 328p` CLI option for Gamebuino Classic / Arduino Uno
+- **`CpuType` enum** — `Atmega32u4` (default) / `Atmega328p` selection at construction
+- **`Arduboy::new_with_cpu()`** — Constructor with explicit CPU type
+- **Timer2 peripheral** — 8-bit asynchronous timer for ATmega328P (reuses Timer8 with dedicated register addresses and interrupt vectors)
+- **ATmega328P interrupt vector table** — 26-entry vector table (separate from 32u4's 43-entry table)
+- **ATmega328P memory map** — SRAM 2 KB (vs 32u4's 2.5 KB), dynamic `Memory::new_with_size()`
+- **Gamebuino Classic button mapping** — 328P pin layout: UP=PB1, DOWN=PD6, LEFT=PB0, RIGHT=PD7, A=PD4, B=PD2
+- **328P PCD8544 SPI routing** — CS=PC2, DC=PC3 for Gamebuino Classic display
+
+### Changed
+
+- Timer8 and Timer16 now take interrupt vector addresses via `Addrs` struct (no hardcoded vectors)
+- `peripherals::mod.rs` reorganized with separate 32u4 and 328P vector constant blocks
+- Timer3, Timer4, USB serial conditionally active based on `cpu_type`
+- SPI output tuple expanded to 4-tuple `(byte, portd, portf, portc)` for 328P PORTC routing
+- `Memory` doc updated for dual-CPU support
+
 ## [0.4.0] - 2025-02-13
 
 ### Added

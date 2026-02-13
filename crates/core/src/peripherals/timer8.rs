@@ -1,10 +1,11 @@
-//! 8-bit Timer/Counter0 emulation.
+//! 8-bit Timer/Counter emulation.
 //!
 //! Supports Normal, CTC, and Fast PWM modes with prescalers (1/8/64/256/1024).
 //! Handles overflow and compare-match interrupts. Used by the Arduino core
 //! library for `millis()`, `micros()`, and `delay()` timing.
-
-use super::{INT_TIMER0_OVF, INT_TIMER0_COMPA, INT_TIMER0_COMPB};
+//!
+//! Reusable for Timer0 (both ATmega32u4 and ATmega328P) and Timer2 (ATmega328P)
+//! by providing appropriate register addresses and interrupt vectors.
 
 #[derive(Debug, Clone)]
 pub struct Timer8Addrs {
@@ -15,6 +16,12 @@ pub struct Timer8Addrs {
     pub ocr_b: u16,
     pub timsk: u16,
     pub tcnt: u16,
+    /// Overflow interrupt vector (word address)
+    pub int_ovf: u16,
+    /// Compare match A interrupt vector (word address)
+    pub int_compa: u16,
+    /// Compare match B interrupt vector (word address)
+    pub int_compb: u16,
 }
 
 pub struct Timer8 {
@@ -221,15 +228,15 @@ impl Timer8 {
         if self.tov0 > 0 && self.toie0 {
             self.tov0 = self.tov0.saturating_sub(1);
             self.dbg_int_fire_count += 1;
-            return Some(INT_TIMER0_OVF);
+            return Some(self.addrs.int_ovf);
         }
         if self.ocf0a > 0 && self.ocie0a {
             self.ocf0a = self.ocf0a.saturating_sub(1);
-            return Some(INT_TIMER0_COMPA);
+            return Some(self.addrs.int_compa);
         }
         if self.ocf0b > 0 && self.ocie0b {
             self.ocf0b = self.ocf0b.saturating_sub(1);
-            return Some(INT_TIMER0_COMPB);
+            return Some(self.addrs.int_compb);
         }
         None
     }

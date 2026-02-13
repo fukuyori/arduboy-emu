@@ -1,24 +1,25 @@
 # arduboy-emu
 
-**v0.4.0** — A cycle-accurate Arduboy emulator written in Rust.
+**v0.5.0** — A cycle-accurate Arduboy emulator written in Rust.
 
-Emulates the ATmega32u4 microcontroller at 16 MHz with display, audio, gamepad, and Arduboy FX flash support.
+Emulates the ATmega32u4 (Arduboy) and ATmega328P (Gamebuino Classic) microcontrollers at 16 MHz with display, audio, gamepad, and Arduboy FX flash support.
 
 ## Features
 
+- **Dual CPU support** — ATmega32u4 (default) and ATmega328P (`--cpu 328p`)
 - **AVR CPU core** — 80+ instructions with accurate flag computation (ADD, SUB, SBC/SBCI carry chains, MUL, etc.)
 - **SSD1306 OLED display** — 128×64 monochrome with horizontal/vertical addressing, contrast control, and invert
-- **PCD8544 LCD** — 84×48 Nokia display for Gamebuino Classic compatibility (auto-detected)
+- **PCD8544 LCD** — 84×48 Nokia display for Gamebuino Classic compatibility (auto-detected, default on 328P)
 - **Stereo audio** — Two independent channels with sample-accurate waveform rendering:
   - Left: Timer3 CTC / Timer4 CTC / GPIO bit-bang on PC6 (Speaker 1)
   - Right: Timer1 CTC / GPIO bit-bang on PB5 (Speaker 2)
   - Hybrid audio: sample-accurate PCM for GPIO bit-bang, square wave synthesis fallback for timers
 - **Gamepad support** — Cross-platform via gilrs (Windows/Linux/macOS), with hot-plug
 - **Arduboy FX** — W25Q128 16 MB SPI flash emulation (Read, Fast Read, JEDEC ID, erase, program)
-- **Peripherals** — Timer0/1/3/4, SPI, ADC, PLL, EEPROM, USB Serial output
+- **Peripherals** — Timer0/1/2/3/4, SPI, ADC, PLL, EEPROM, USB Serial output
 - **Debugger** — Disassembler, breakpoints, step-by-step execution, register dump
 - **Dynamic display** — Scale 1×–6× toggle, fullscreen, PNG screenshots
-- **USB Serial** — Captures `Serial.print()` output via UEDATX register interception
+- **USB Serial** — Captures `Serial.print()` output via UEDATX register interception (32u4 only)
 - **Headless mode** — Automated testing with frame snapshots and diagnostics
 - **.arduboy file support** — Load ZIP archives with info.json, hex, and FX bin
 - **EEPROM persistence** — Auto-save/load to .eep file alongside game
@@ -46,6 +47,7 @@ arduboy-emu <file.hex|file.arduboy> [options]
 
 Options:
   --fx <file.bin>    Load FX flash data
+  --cpu <type>       CPU type: 32u4 (default) or 328p (Gamebuino Classic)
   --mute             Disable audio
   --debug            Show per-frame diagnostics
   --headless         Run without GUI
@@ -119,6 +121,8 @@ Press **O** to list all `.hex` and `.arduboy` files in the game's directory, the
 | FPS toggle  | F          | —                           | — (60fps ↔ unlimited)         |
 | Reg dump    | D          | —                           | —                             |
 | Mute       | M          | —                           | —                             |
+| Blur       | B          | —                           | — (soft pixel smoothing)      |
+| LCD effect | L          | —                           | — (display-accurate colors)   |
 | Quit       | Escape     | —                           | —                             |
 
 Keyboard and gamepad inputs are OR-combined, so both can be used simultaneously.

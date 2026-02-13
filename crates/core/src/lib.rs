@@ -1,20 +1,22 @@
 //! # arduboy-core
 //!
-//! Cycle-accurate emulation core for the Arduboy handheld game console (v0.4.0).
+//! Cycle-accurate emulation core for the Arduboy handheld game console (v0.5.0).
 //!
-//! Emulates the ATmega32u4 microcontroller (16 MHz, 32 KB flash, 2.5 KB SRAM,
-//! 1 KB EEPROM) along with peripheral hardware: SSD1306 OLED display, PCD8544
-//! Nokia LCD (Gamebuino), SPI bus, Timer0/1/3, ADC, PLL, EEPROM controller,
+//! Emulates the ATmega32u4 microcontroller (Arduboy) and ATmega328P (Gamebuino
+//! Classic / Arduino Uno) with 16 MHz clock, 32 KB flash, 2–2.5 KB SRAM,
+//! 1 KB EEPROM. Peripheral hardware: SSD1306 OLED display, PCD8544 Nokia LCD
+//! (Gamebuino), SPI bus, Timer0/1/2/3/4, ADC, PLL, EEPROM controller,
 //! W25Q128 FX external flash, and USB serial output.
 //!
 //! ## Architecture
 //!
 //! - [`Arduboy`] — Top-level emulator that wires together CPU, memory, and peripherals
+//! - [`CpuType`] — Target CPU selection (ATmega32u4 or ATmega328P)
 //! - [`Cpu`] — AVR CPU state (PC, SP, SREG, tick counter, sleep mode)
 //! - [`Memory`] — Unified data space (registers + I/O + SRAM), flash, and EEPROM
 //! - [`Ssd1306`] — SSD1306 128×64 monochrome OLED display controller
 //! - [`pcd8544::Pcd8544`] — PCD8544 84×48 monochrome LCD (Gamebuino compatibility)
-//! - [`peripherals`] — Timer8, Timer16, SPI, ADC, PLL, EEPROM, FX flash
+//! - [`peripherals`] — Timer8, Timer16, Timer4, SPI, ADC, PLL, EEPROM, FX flash
 //! - [`disasm`] — Instruction disassembler for debug views
 //!
 //! ## Audio
@@ -48,8 +50,10 @@ pub use audio_buffer::AudioBuffer;
 // ATmega32u4 constants
 /// Flash memory size: 32 KB
 pub const FLASH_SIZE: usize = 32 * 1024;
-/// SRAM size: 2.5 KB (2048 + 512)
+/// SRAM size: 2.5 KB (2048 + 512) for ATmega32u4
 pub const SRAM_SIZE: usize = 2 * 1024 + 512;
+/// SRAM size: 2 KB for ATmega328P
+pub const SRAM_SIZE_328P: usize = 2 * 1024;
 /// EEPROM size: 1 KB
 pub const EEPROM_SIZE: usize = 1024;
 /// CPU clock frequency: 16 MHz
@@ -64,8 +68,19 @@ pub const SCREEN_HEIGHT: usize = 64;
 pub const REG_COUNT: usize = 32;
 /// I/O + extended I/O register space size (0x20..0xFF)
 pub const IO_SIZE: usize = 224;
-/// Total data space: registers + I/O + SRAM
+/// Total data space (ATmega32u4): registers + I/O + SRAM
 pub const DATA_SIZE: usize = REG_COUNT + IO_SIZE + SRAM_SIZE;
+/// Total data space (ATmega328P)
+pub const DATA_SIZE_328P: usize = REG_COUNT + IO_SIZE + SRAM_SIZE_328P;
+
+/// Target CPU type
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CpuType {
+    /// ATmega32u4 (Arduboy, Leonardo)
+    Atmega32u4,
+    /// ATmega328P (Gamebuino Classic, Arduino Uno)
+    Atmega328p,
+}
 
 // SREG bit positions
 pub const SREG_C: u8 = 0;
@@ -102,6 +117,8 @@ pub struct Arduboy {
     pub timer1: peripherals::Timer16,
     pub timer3: peripherals::Timer16,
     pub timer4: peripherals::Timer4,
+    /// Timer2 (ATmega328P only, 8-bit async)
+    pub timer2: peripherals::Timer8,
     pub spi: peripherals::Spi,
     pub pll: peripherals::Pll,
     pub adc: peripherals::Adc,
@@ -117,7 +134,7 @@ pub struct Arduboy {
     pub pin_e: u8,
     pub pin_f: u8,
     /// SPI output buffer with raw port state per byte
-    spi_out: Vec<(u8, u8, u8)>, // (byte, portd_val, portf_val)
+    spi_out: Vec<(u8, u8, u8, u8)>, // (byte, portd_val, portf_val, portc_val)
     /// Random state for ADC
     rng_state: u32,
     /// Debug counter: total SPDR writes since reset
@@ -168,6 +185,10 @@ pub struct Arduboy {
     pub led_rx: bool,
     /// EEPROM dirty flag (true if modified since last save)
     pub eeprom_dirty: bool,
+    /// Target CPU type
+    pub cpu_type: CpuType,
+    /// Actual SRAM size (varies by CPU type)
+    sram_size: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -178,37 +199,96 @@ pub enum DisplayType {
 }
 
 impl Arduboy {
-    /// Create a new Arduboy emulator with all peripherals in reset state.
-    ///
-    /// The stack pointer is initialized to the top of SRAM (0x0AFF).
-    /// Call [`load_hex`](Self::load_hex) to load a game before running.
+    /// Create a new Arduboy emulator (ATmega32u4) with all peripherals in reset state.
     pub fn new() -> Self {
-        let mut ard = Arduboy {
-            cpu: Cpu::new(),
-            mem: Memory::new(),
-            display: Ssd1306::new(),
-            timer0: peripherals::Timer8::new(peripherals::Timer8Addrs {
+        Self::new_with_cpu(CpuType::Atmega32u4)
+    }
+
+    /// Create a new emulator for the specified CPU type.
+    pub fn new_with_cpu(cpu_type: CpuType) -> Self {
+        let sram_size = match cpu_type {
+            CpuType::Atmega32u4 => SRAM_SIZE,
+            CpuType::Atmega328p => SRAM_SIZE_328P,
+        };
+        let data_size = REG_COUNT + IO_SIZE + sram_size;
+
+        // Timer0: same register addresses on both chips, different interrupt vectors
+        let timer0_addrs = match cpu_type {
+            CpuType::Atmega32u4 => peripherals::Timer8Addrs {
                 tifr: 0x35, tccr_a: 0x44, tccr_b: 0x45,
                 ocr_a: 0x47, ocr_b: 0x48, timsk: 0x6E, tcnt: 0x46,
-            }),
-            timer1: peripherals::Timer16::new(peripherals::Timer16Addrs {
+                int_ovf: peripherals::INT_TIMER0_OVF,
+                int_compa: peripherals::INT_TIMER0_COMPA,
+                int_compb: peripherals::INT_TIMER0_COMPB,
+            },
+            CpuType::Atmega328p => peripherals::Timer8Addrs {
+                tifr: 0x35, tccr_a: 0x44, tccr_b: 0x45,
+                ocr_a: 0x47, ocr_b: 0x48, timsk: 0x6E, tcnt: 0x46,
+                int_ovf: peripherals::INT_328P_TIMER0_OVF,
+                int_compa: peripherals::INT_328P_TIMER0_COMPA,
+                int_compb: peripherals::INT_328P_TIMER0_COMPB,
+            },
+        };
+
+        // Timer1: same register addresses, different vectors
+        let timer1_addrs = match cpu_type {
+            CpuType::Atmega32u4 => peripherals::Timer16Addrs {
                 tifr: 0x36, tccr_a: 0x80, tccr_b: 0x81, tccr_c: 0x82,
                 ocr_ah: 0x89, ocr_al: 0x88, ocr_bh: 0x8B, ocr_bl: 0x8A,
                 ocr_ch: 0x8D, ocr_cl: 0x8C,
                 timsk: 0x6F, tcnth: 0x85, tcntl: 0x84,
-            }),
-            timer3: peripherals::Timer16::new(peripherals::Timer16Addrs {
-                tifr: 0x38, tccr_a: 0x90, tccr_b: 0x91, tccr_c: 0x92,
-                ocr_ah: 0x99, ocr_al: 0x98, ocr_bh: 0x9B, ocr_bl: 0x9A,
-                ocr_ch: 0x9D, ocr_cl: 0x9C,
-                timsk: 0x71, tcnth: 0x94, tcntl: 0x95,
-            }),
+                int_ovf: peripherals::INT_TIMER1_OVF,
+                int_compa: peripherals::INT_TIMER1_COMPA,
+                int_compb: peripherals::INT_TIMER1_COMPB,
+                int_compc: peripherals::INT_TIMER1_COMPC,
+            },
+            CpuType::Atmega328p => peripherals::Timer16Addrs {
+                tifr: 0x36, tccr_a: 0x80, tccr_b: 0x81, tccr_c: 0x82,
+                ocr_ah: 0x89, ocr_al: 0x88, ocr_bh: 0x8B, ocr_bl: 0x8A,
+                ocr_ch: 0x8D, ocr_cl: 0x8C, // 328P has no OCR1C but addr harmless
+                timsk: 0x6F, tcnth: 0x85, tcntl: 0x84,
+                int_ovf: peripherals::INT_328P_TIMER1_OVF,
+                int_compa: peripherals::INT_328P_TIMER1_COMPA,
+                int_compb: peripherals::INT_328P_TIMER1_COMPB,
+                int_compc: 0, // no compare C on 328P
+            },
+        };
+
+        // Timer3: ATmega32u4 only
+        let timer3_addrs = peripherals::Timer16Addrs {
+            tifr: 0x38, tccr_a: 0x90, tccr_b: 0x91, tccr_c: 0x92,
+            ocr_ah: 0x99, ocr_al: 0x98, ocr_bh: 0x9B, ocr_bl: 0x9A,
+            ocr_ch: 0x9D, ocr_cl: 0x9C,
+            timsk: 0x71, tcnth: 0x94, tcntl: 0x95,
+            int_ovf: peripherals::INT_TIMER3_OVF,
+            int_compa: peripherals::INT_TIMER3_COMPA,
+            int_compb: peripherals::INT_TIMER3_COMPB,
+            int_compc: peripherals::INT_TIMER3_COMPC,
+        };
+
+        // Timer2: ATmega328P only (8-bit, different addresses from Timer0)
+        let timer2_addrs = peripherals::Timer8Addrs {
+            tifr: 0x37, tccr_a: 0xB0, tccr_b: 0xB1,
+            ocr_a: 0xB3, ocr_b: 0xB4, timsk: 0x70, tcnt: 0xB2,
+            int_ovf: peripherals::INT_328P_TIMER2_OVF,
+            int_compa: peripherals::INT_328P_TIMER2_COMPA,
+            int_compb: peripherals::INT_328P_TIMER2_COMPB,
+        };
+
+        let mut ard = Arduboy {
+            cpu: Cpu::new(),
+            mem: Memory::new_with_size(data_size),
+            display: Ssd1306::new(),
+            timer0: peripherals::Timer8::new(timer0_addrs),
+            timer1: peripherals::Timer16::new(timer1_addrs),
+            timer3: peripherals::Timer16::new(timer3_addrs),
+            timer4: peripherals::Timer4::new(),
+            timer2: peripherals::Timer8::new(timer2_addrs),
             spi: peripherals::Spi::new(),
             pll: peripherals::Pll::new(),
             adc: peripherals::Adc::new(),
             eeprom_ctrl: peripherals::EepromCtrl::new(),
             fx_flash: peripherals::FxFlash::new(),
-            timer4: peripherals::Timer4::new(),
             spdr_in: 0,
             pin_b: 0xFF, pin_c: 0xFF, pin_d: 0xFF, pin_e: 0xFF, pin_f: 0xFF,
             spi_out: Vec::new(),
@@ -217,7 +297,7 @@ impl Arduboy {
             display_type: DisplayType::Unknown,
             pcd8544: pcd8544::Pcd8544::new(),
             frame_count: 0,
-            fx_cs_prev: true, // CS starts HIGH (deselected)
+            fx_cs_prev: true,
             debug: false,
             speaker_prev_pc6: false,
             speaker_last_edge: 0,
@@ -237,12 +317,20 @@ impl Arduboy {
             led_tx: false,
             led_rx: false,
             eeprom_dirty: false,
+            cpu_type,
+            sram_size,
         };
         // Initialize SP to top of SRAM
-        let sp = (DATA_SIZE - 1) as u16;
+        let sp = (data_size - 1) as u16;
         ard.mem.data[SPH_ADDR as usize] = (sp >> 8) as u8;
         ard.mem.data[SPL_ADDR as usize] = (sp & 0xFF) as u8;
         ard.cpu.sp = sp;
+
+        // ATmega328P defaults to PCD8544 (Gamebuino Classic)
+        if cpu_type == CpuType::Atmega328p {
+            ard.display_type = DisplayType::Pcd8544;
+        }
+
         ard
     }
 
@@ -271,7 +359,8 @@ impl Arduboy {
     pub fn reset(&mut self) {
         self.cpu = Cpu::new();
         self.mem.data.fill(0);
-        let sp = (DATA_SIZE - 1) as u16;
+        let data_size = REG_COUNT + IO_SIZE + self.sram_size;
+        let sp = (data_size - 1) as u16;
         self.mem.data[SPH_ADDR as usize] = (sp >> 8) as u8;
         self.mem.data[SPL_ADDR as usize] = (sp & 0xFF) as u8;
         self.cpu.sp = sp;
@@ -282,6 +371,7 @@ impl Arduboy {
         self.timer1.reset();
         self.timer3.reset();
         self.timer4.reset();
+        self.timer2.reset();
         self.spi.reset();
         self.pll.reset();
         self.adc.reset();
@@ -317,33 +407,51 @@ impl Arduboy {
     /// Set button state (true = pressed)
     pub fn set_button(&mut self, btn: Button, pressed: bool) {
         // Active-low: pressed = bit cleared, released = bit set
-        
-        // --- Arduboy pin mapping ---
-        // UP=PF7, DOWN=PF4, LEFT=PF5, RIGHT=PF6, A=PE6, B=PB4
-        if self.display_type != DisplayType::Pcd8544 {
-            let (pin, bit): (&mut u8, u8) = match btn {
-                Button::Up    => (&mut self.pin_f, 7),
-                Button::Down  => (&mut self.pin_f, 4),
-                Button::Left  => (&mut self.pin_f, 5),
-                Button::Right => (&mut self.pin_f, 6),
-                Button::A     => (&mut self.pin_e, 6),
-                Button::B     => (&mut self.pin_b, 4),
-            };
-            if pressed { *pin &= !(1 << bit); } else { *pin |= 1 << bit; }
-        }
 
-        // --- Gamebuino pin mapping ---
-        // UP=PB5(9), DOWN=PD7(6), LEFT=PB4(8), RIGHT=PE6(7), A=PD4(4), B=PD1(2), C=PF4(A3)
-        if self.display_type != DisplayType::Ssd1306 {
-            let (pin2, bit2): (&mut u8, u8) = match btn {
-                Button::Up    => (&mut self.pin_b, 5),
-                Button::Down  => (&mut self.pin_d, 7),
-                Button::Left  => (&mut self.pin_b, 4),
-                Button::Right => (&mut self.pin_e, 6),
-                Button::A     => (&mut self.pin_d, 4),
-                Button::B     => (&mut self.pin_d, 1),
-            };
-            if pressed { *pin2 &= !(1 << bit2); } else { *pin2 |= 1 << bit2; }
+        match self.cpu_type {
+            CpuType::Atmega32u4 => {
+                // --- Arduboy pin mapping (32u4) ---
+                // UP=PF7, DOWN=PF4, LEFT=PF5, RIGHT=PF6, A=PE6, B=PB4
+                if self.display_type != DisplayType::Pcd8544 {
+                    let (pin, bit): (&mut u8, u8) = match btn {
+                        Button::Up    => (&mut self.pin_f, 7),
+                        Button::Down  => (&mut self.pin_f, 4),
+                        Button::Left  => (&mut self.pin_f, 5),
+                        Button::Right => (&mut self.pin_f, 6),
+                        Button::A     => (&mut self.pin_e, 6),
+                        Button::B     => (&mut self.pin_b, 4),
+                    };
+                    if pressed { *pin &= !(1 << bit); } else { *pin |= 1 << bit; }
+                }
+
+                // --- Gamebuino pin mapping (32u4 with PCD8544) ---
+                // UP=PB5(9), DOWN=PD7(6), LEFT=PB4(8), RIGHT=PE6(7), A=PD4(4), B=PD1(2)
+                if self.display_type != DisplayType::Ssd1306 {
+                    let (pin2, bit2): (&mut u8, u8) = match btn {
+                        Button::Up    => (&mut self.pin_b, 5),
+                        Button::Down  => (&mut self.pin_d, 7),
+                        Button::Left  => (&mut self.pin_b, 4),
+                        Button::Right => (&mut self.pin_e, 6),
+                        Button::A     => (&mut self.pin_d, 4),
+                        Button::B     => (&mut self.pin_d, 1),
+                    };
+                    if pressed { *pin2 &= !(1 << bit2); } else { *pin2 |= 1 << bit2; }
+                }
+            }
+            CpuType::Atmega328p => {
+                // --- Gamebuino Classic pin mapping (328P) ---
+                // UP=PB1(D9), DOWN=PD6(D6), LEFT=PB0(D8), RIGHT=PD7(D7)
+                // A=PD4(D4), B=PD2(D2)
+                let (pin, bit): (&mut u8, u8) = match btn {
+                    Button::Up    => (&mut self.pin_b, 1),
+                    Button::Down  => (&mut self.pin_d, 6),
+                    Button::Left  => (&mut self.pin_b, 0),
+                    Button::Right => (&mut self.pin_d, 7),
+                    Button::A     => (&mut self.pin_d, 4),
+                    Button::B     => (&mut self.pin_d, 2),
+                };
+                if pressed { *pin &= !(1 << bit); } else { *pin |= 1 << bit; }
+            }
         }
     }
 
@@ -528,9 +636,17 @@ impl Arduboy {
         if let Some(v) = self.timer3.read(addr, self.cpu.tick, &self.mem.data) {
             return v;
         }
-        // Timer4 reads
-        if let Some(v) = self.timer4.read(addr) {
-            return v;
+        // Timer4 reads (ATmega32u4 only)
+        if self.cpu_type == CpuType::Atmega32u4 {
+            if let Some(v) = self.timer4.read(addr) {
+                return v;
+            }
+        }
+        // Timer2 reads (ATmega328P only)
+        if self.cpu_type == CpuType::Atmega328p {
+            if let Some(v) = self.timer2.read(addr, self.cpu.tick, &self.mem.data) {
+                return v;
+            }
         }
         // SPI reads
         if let Some(v) = self.spi.read(addr) {
@@ -550,23 +666,24 @@ impl Arduboy {
             return v;
         }
 
-        // USB Serial register reads
-        match addr {
-            0xE8 => { // UEINTX - always report ready to send
-                // TXINI=1 (bit 0), RWAL=1 (bit 5), FIFOCON=1 (bit 7)
-                return 0xA1;
+        // USB Serial register reads (ATmega32u4 only)
+        if self.cpu_type == CpuType::Atmega32u4 {
+            match addr {
+                0xE8 => { // UEINTX - always report ready to send
+                    return 0xA1;
+                }
+                0xE9 => return self.usb_uenum, // UENUM
+                0xEE => return 0x61, // UESTA0X
+                0xEF => return 0x00, // UESTA1X
+                0xF2 => return 0x40, // UEBCLX
+                0xF3 => return 0x00, // UEBCHX
+                0xD8 => { // USBCON
+                    return if self.usb_configured { 0x80 } else { 0 };
+                }
+                0xD9 => return 0x08, // USBSTA
+                0xE3 => return 0x80, // UDADDR
+                _ => {}
             }
-            0xE9 => return self.usb_uenum, // UENUM
-            0xEE => return 0x61, // UESTA0X - CFGOK | NBUSYBK=1
-            0xEF => return 0x00, // UESTA1X
-            0xF2 => return 0x40, // UEBCLX - bytes available (64)
-            0xF3 => return 0x00, // UEBCHX
-            0xD8 => { // USBCON
-                return if self.usb_configured { 0x80 } else { 0 };
-            }
-            0xD9 => return 0x08, // USBSTA - VBUS high
-            0xE3 => return 0x80, // UDADDR - configured
-            _ => {}
         }
 
         if a < self.mem.data.len() {
@@ -695,10 +812,16 @@ impl Arduboy {
         if self.timer1.write(addr, value, old, &mut self.mem.data) { return; }
         // Timer3 writes
         if self.timer3.write(addr, value, old, &mut self.mem.data) { return; }
-        // Timer4 writes
-        if self.timer4.write(addr, value) {
-            if a < self.mem.data.len() { self.mem.data[a] = value; }
-            return;
+        // Timer4 writes (ATmega32u4 only)
+        if self.cpu_type == CpuType::Atmega32u4 {
+            if self.timer4.write(addr, value) {
+                if a < self.mem.data.len() { self.mem.data[a] = value; }
+                return;
+            }
+        }
+        // Timer2 writes (ATmega328P only)
+        if self.cpu_type == CpuType::Atmega328p {
+            if self.timer2.write(addr, value, old, &mut self.mem.data) { return; }
         }
 
         // SPI writes
@@ -735,7 +858,8 @@ impl Arduboy {
                             (portf >> 5) & 1, (portf >> 6) & 1,
                             portb, portd, porte, portf);
                     }
-                    self.spi_out.push((value, portd, portf));
+                    let portc = self.mem.data[0x28];
+                    self.spi_out.push((value, portd, portf, portc));
                     self.spdr_in = 0xFF;
                 }
                 self.dbg_spdr_writes += 1;
@@ -770,8 +894,9 @@ impl Arduboy {
             return;
         }
 
-        // USB Serial registers
-        match addr {
+        // USB Serial registers (ATmega32u4 only)
+        if self.cpu_type == CpuType::Atmega32u4 {
+            match addr {
             0xE9 => { // UENUM - endpoint select
                 self.usb_uenum = value & 0x07;
                 if a < self.mem.data.len() { self.mem.data[a] = value; }
@@ -808,6 +933,7 @@ impl Arduboy {
                 return;
             }
             _ => {}
+            }
         }
 
         // Default write
@@ -829,49 +955,55 @@ impl Arduboy {
 
     /// Flush SPI output to display
     fn flush_spi(&mut self) {
-        let bytes: Vec<(u8, u8, u8)> = self.spi_out.drain(..).collect();
-        for (byte, portd, portf) in bytes {
-            // Decode DC and CS based on display type
-            // Arduboy:   DC=PD4(bit4), CS=PD6(bit6) - active LOW
-            // Gamebuino: DC=PF5(bit5), CS=PF6(bit6) - active LOW
-            let (is_data, cs_high) = match self.display_type {
-                DisplayType::Ssd1306 => {
-                    (portd & (1 << 4) != 0, portd & (1 << 6) != 0)
-                }
-                DisplayType::Pcd8544 => {
-                    (portf & (1 << 5) != 0, portf & (1 << 6) != 0)
-                }
-                DisplayType::Unknown => {
-                    let ardu_cs_active = portd & (1 << 6) == 0;
-                    let ardu_dc_cmd = portd & (1 << 4) == 0;
-                    let gb_cs_active = portf & (1 << 6) == 0;
-                    let gb_dc_cmd = portf & (1 << 5) == 0;
-
-                    if self.debug && self.dbg_spdr_writes < 30 {
-                        eprintln!("  DETECT: val=0x{:02X} ardu(cs={} dc_cmd={}) gb(cs={} dc_cmd={})",
-                            byte, ardu_cs_active, ardu_dc_cmd, gb_cs_active, gb_dc_cmd);
+        let bytes: Vec<(u8, u8, u8, u8)> = self.spi_out.drain(..).collect();
+        for (byte, portd, portf, portc) in bytes {
+            // Decode DC and CS based on display type and CPU
+            // Arduboy (32u4):           DC=PD4(bit4), CS=PD6(bit6) - active LOW
+            // Gamebuino (32u4 PCD8544): DC=PF5(bit5), CS=PF6(bit6) - active LOW
+            // Gamebuino Classic (328P): DC=PC3(bit3), CS=PC2(bit2) - active LOW
+            let (is_data, cs_high) = if self.cpu_type == CpuType::Atmega328p {
+                // 328P: always PCD8544, CS=PC2, DC=PC3
+                (portc & (1 << 3) != 0, portc & (1 << 2) != 0)
+            } else {
+                match self.display_type {
+                    DisplayType::Ssd1306 => {
+                        (portd & (1 << 4) != 0, portd & (1 << 6) != 0)
                     }
+                    DisplayType::Pcd8544 => {
+                        (portf & (1 << 5) != 0, portf & (1 << 6) != 0)
+                    }
+                    DisplayType::Unknown => {
+                        let ardu_cs_active = portd & (1 << 6) == 0;
+                        let ardu_dc_cmd = portd & (1 << 4) == 0;
+                        let gb_cs_active = portf & (1 << 6) == 0;
+                        let gb_dc_cmd = portf & (1 << 5) == 0;
 
-                    if ardu_cs_active && ardu_dc_cmd {
-                        if byte >= 0x80 {
-                            self.display_type = DisplayType::Ssd1306;
-                            if self.debug {
-                                eprintln!("Display auto-detected: SSD1306 (first cmd: 0x{:02X}, PD4=0 PD6=0)", byte);
+                        if self.debug && self.dbg_spdr_writes < 30 {
+                            eprintln!("  DETECT: val=0x{:02X} ardu(cs={} dc_cmd={}) gb(cs={} dc_cmd={})",
+                                byte, ardu_cs_active, ardu_dc_cmd, gb_cs_active, gb_dc_cmd);
+                        }
+
+                        if ardu_cs_active && ardu_dc_cmd {
+                            if byte >= 0x80 {
+                                self.display_type = DisplayType::Ssd1306;
+                                if self.debug {
+                                    eprintln!("Display auto-detected: SSD1306 (first cmd: 0x{:02X}, PD4=0 PD6=0)", byte);
+                                }
                             }
                         }
-                    }
-                    if self.display_type == DisplayType::Unknown && gb_cs_active && gb_dc_cmd {
-                        if byte == 0x21 || byte == 0x20 {
-                            self.display_type = DisplayType::Pcd8544;
-                            if self.debug {
-                                eprintln!("Display auto-detected: PCD8544 (first cmd: 0x{:02X}, PF5=0 PF6=0)", byte);
+                        if self.display_type == DisplayType::Unknown && gb_cs_active && gb_dc_cmd {
+                            if byte == 0x21 || byte == 0x20 {
+                                self.display_type = DisplayType::Pcd8544;
+                                if self.debug {
+                                    eprintln!("Display auto-detected: PCD8544 (first cmd: 0x{:02X}, PF5=0 PF6=0)", byte);
+                                }
                             }
                         }
-                    }
 
-                    match self.display_type {
-                        DisplayType::Pcd8544 => (portf & (1 << 5) != 0, portf & (1 << 6) != 0),
-                        _ => (portd & (1 << 4) != 0, portd & (1 << 6) != 0),
+                        match self.display_type {
+                            DisplayType::Pcd8544 => (portf & (1 << 5) != 0, portf & (1 << 6) != 0),
+                            _ => (portd & (1 << 4) != 0, portd & (1 << 6) != 0),
+                        }
                     }
                 }
             };
@@ -931,23 +1063,39 @@ impl Arduboy {
             }
         }
 
-        // Timer3
-        self.timer3.update(tick, &mut self.mem.data);
-        if ie {
-            if let Some(vec_addr) = self.timer3.check_interrupt() {
-                self.cpu.sleeping = false;
-                self.do_interrupt(vec_addr);
-                return;
+        // Timer3 (ATmega32u4 only)
+        if self.cpu_type == CpuType::Atmega32u4 {
+            self.timer3.update(tick, &mut self.mem.data);
+            if ie {
+                if let Some(vec_addr) = self.timer3.check_interrupt() {
+                    self.cpu.sleeping = false;
+                    self.do_interrupt(vec_addr);
+                    return;
+                }
             }
         }
 
-        // Timer4
-        self.timer4.update(tick, &mut self.mem.data);
-        if ie {
-            if let Some(vec_addr) = self.timer4.check_interrupt() {
-                self.cpu.sleeping = false;
-                self.do_interrupt(vec_addr);
-                return;
+        // Timer4 (ATmega32u4 only)
+        if self.cpu_type == CpuType::Atmega32u4 {
+            self.timer4.update(tick, &mut self.mem.data);
+            if ie {
+                if let Some(vec_addr) = self.timer4.check_interrupt() {
+                    self.cpu.sleeping = false;
+                    self.do_interrupt(vec_addr);
+                    return;
+                }
+            }
+        }
+
+        // Timer2 (ATmega328P only)
+        if self.cpu_type == CpuType::Atmega328p {
+            self.timer2.update(tick, &mut self.mem.data);
+            if ie {
+                if let Some(vec_addr) = self.timer2.check_interrupt() {
+                    self.cpu.sleeping = false;
+                    self.do_interrupt(vec_addr);
+                    return;
+                }
             }
         }
 
@@ -1032,9 +1180,15 @@ impl Arduboy {
     ///
     /// Priority within each channel: hardware timer > GPIO bit-bang.
     pub fn get_audio_tone(&self) -> (f32, f32) {
-        let t3 = self.timer3.get_tone_hz(CLOCK_HZ);
         let t1 = self.timer1.get_tone_hz(CLOCK_HZ);
-        let t4 = self.timer4.get_tone_hz(CLOCK_HZ);
+
+        // Timer3/Timer4 only on 32u4
+        let t3 = if self.cpu_type == CpuType::Atmega32u4 {
+            self.timer3.get_tone_hz(CLOCK_HZ)
+        } else { 0.0 };
+        let t4 = if self.cpu_type == CpuType::Atmega32u4 {
+            self.timer4.get_tone_hz(CLOCK_HZ)
+        } else { 0.0 };
 
         // GPIO bit-bang speaker 1 (PC6): derive frequency from toggle rate
         let gpio1_hz = if self.speaker_half_period > 0 {
@@ -1076,6 +1230,16 @@ mod tests {
         let ard = Arduboy::new();
         assert_eq!(ard.cpu.pc, 0);
         assert_eq!(ard.cpu.sp, (DATA_SIZE - 1) as u16);
+        assert_eq!(ard.cpu_type, CpuType::Atmega32u4);
+    }
+
+    #[test]
+    fn test_328p_creation() {
+        let ard = Arduboy::new_with_cpu(CpuType::Atmega328p);
+        assert_eq!(ard.cpu.pc, 0);
+        assert_eq!(ard.cpu.sp, (DATA_SIZE_328P - 1) as u16);
+        assert_eq!(ard.cpu_type, CpuType::Atmega328p);
+        assert_eq!(ard.display_type, DisplayType::Pcd8544);
     }
 
     #[test]
@@ -1086,6 +1250,17 @@ mod tests {
         assert_eq!(ard.pin_f & (1 << 7), 0); // UP pressed (active low)
         ard.set_button(Button::Up, false);
         assert_eq!(ard.pin_f & (1 << 7), 1 << 7); // UP released
+    }
+
+    #[test]
+    fn test_328p_button_press() {
+        let mut ard = Arduboy::new_with_cpu(CpuType::Atmega328p);
+        // 328P Gamebuino: UP=PB1
+        assert_eq!(ard.pin_b & (1 << 1), 1 << 1);
+        ard.set_button(Button::Up, true);
+        assert_eq!(ard.pin_b & (1 << 1), 0);
+        ard.set_button(Button::Up, false);
+        assert_eq!(ard.pin_b & (1 << 1), 1 << 1);
     }
 
     #[test]

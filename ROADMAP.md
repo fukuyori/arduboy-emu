@@ -16,7 +16,7 @@ ProjectABE (JavaScript, Web) との機能差分と、バージョンアップ計
 | レジスタ/RAM ウォッチ | ✓ | ✓ (レジスタのみ) | **v0.2.0 で追加** |
 | 逆アセンブラ | ✓ | ✓ | **v0.2.0 で追加** |
 | ソースマップ連携 | ✓ | ✗ | コンパイラ連携なし |
-| ATmega328P 対応 | ✓ | ✗ | 32u4 のみ |
+| ATmega328P 対応 | ✓ | ✓ (v0.5.0) | — |
 | Web Worker 分離 | ✓ | ✗ | シングルスレッド |
 
 ### ディスプレイ
@@ -81,18 +81,18 @@ ProjectABE (JavaScript, Web) との機能差分と、バージョンアップ計
 | ミュートトグル | ✓ (M) | ✓ (M) | 同等 |
 | FPS リミッタ | ✓ | ✓ | **v0.4.0 で追加** |
 
-### まとめ (v0.4.0 時点)
+### まとめ (v0.5.0 時点)
 
 | カテゴリ | ProjectABE が上回る | 同等 | arduboy-emu が上回る |
 |----------|:---:|:---:|:---:|
 | CPU/コア | 3 | 4 | 1 |
 | ディスプレイ | 0 | 5 | 1 |
 | オーディオ | 0 | 4 | 2 |
-| ペリフェラル | 1 | 8 | 3 |
+| ペリフェラル | 0 | 9 | 3 |
 | UI/UX | 7 | 3 | 7 |
-| **合計** | **11** | **24** | **14** |
+| **合計** | **10** | **25** | **14** |
 
-**v0.1.0 → v0.4.0 での改善**: ProjectABE優位 24→11 (−13)、同等 13→24 (+11)、arduboy-emu優位 4→14 (+10)
+**v0.1.0 → v0.5.0 での改善**: ProjectABE優位 24→10 (−14)、同等 13→25 (+12)、arduboy-emu優位 4→14 (+10)
 
 ---
 
@@ -132,19 +132,19 @@ ProjectABE (JavaScript, Web) との機能差分と、バージョンアップ計
 - [x] ホットリロード (R キー)
 
 > ※ ネイティブ D&D は minifb 未対応のため、ディレクトリスキャン方式で代替。
-> Web フロントエンド (v0.5.0) でネイティブ D&D を実装予定。
 
-### v0.5.0 — Web フロントエンド
+### v0.5.0 — ATmega328P / Gamebuino Classic 対応
 
-**目標**: ブラウザで動作する Web 版を提供する
+**目標**: ATmega328P CPU をサポートし、Gamebuino Classic のゲームを実行可能にする
 
-- [ ] WebAssembly (wasm32) ビルド対応 (core crate)
-- [ ] HTML/Canvas フロントエンド
-- [ ] Web Audio API によるオーディオ出力
-- [ ] キーボード入力 (Web)
-- [ ] ゲームパッド API (Web Gamepad API)
-- [ ] URL パラメータで .hex 読込
-- [ ] ドラッグ＆ドロップ ファイル読込 (Web)
+- [x] `CpuType` enum (`Atmega32u4` / `Atmega328p`) と構成切替
+- [x] ATmega328P メモリマップ (SRAM 2KB, `Memory::new_with_size()`)
+- [x] ATmega328P 割り込みベクタテーブル (26 本)
+- [x] Timer2 (8-bit 非同期) ペリフェラル (Timer8 再利用, 専用アドレス・ベクタ)
+- [x] ポート制限 (PORTB/C/D のみ, Timer3/Timer4/USB は 32u4 限定)
+- [x] Gamebuino Classic ボタンマッピング (UP=PB1, DOWN=PD6, LEFT=PB0, RIGHT=PD7, A=PD4, B=PD2)
+- [x] `--cpu 328p` CLI オプション
+- [x] PCD8544 SPI ルーティング (CS=PC2, DC=PC3)
 
 ### v0.6.0 — 高度なデバッグ機能
 
@@ -165,8 +165,19 @@ ProjectABE (JavaScript, Web) との機能差分と、バージョンアップ計
 - [ ] ゲームリポジトリブラウザ (eried/ArduboyCollection JSON)
 - [ ] ゲームリスト/サムネイル表示
 - [ ] ワンクリック起動
-- [ ] ATmega328P サポート (Arduino Uno/Gamebuino Classic)
 - [ ] スキンシステム (Arduboy / Microcard / Pipboy / Tama)
+
+### v0.8.0 — Web フロントエンド
+
+**目標**: ブラウザで動作する Web 版を提供する
+
+- [ ] WebAssembly (wasm32) ビルド対応 (core crate)
+- [ ] HTML/Canvas フロントエンド
+- [ ] Web Audio API によるオーディオ出力
+- [ ] キーボード入力 (Web)
+- [ ] ゲームパッド API (Web Gamepad API)
+- [ ] URL パラメータで .hex 読込
+- [ ] ドラッグ＆ドロップ ファイル読込 (Web)
 
 ### v1.0.0 — 安定版リリース
 

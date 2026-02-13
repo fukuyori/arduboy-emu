@@ -23,6 +23,14 @@ pub struct Timer16Addrs {
     pub timsk: u16,
     pub tcnth: u16,
     pub tcntl: u16,
+    /// Overflow interrupt vector (word address)
+    pub int_ovf: u16,
+    /// Compare match A interrupt vector (word address)
+    pub int_compa: u16,
+    /// Compare match B interrupt vector (word address)
+    pub int_compb: u16,
+    /// Compare match C interrupt vector (word address, 0 if unused)
+    pub int_compc: u16,
 }
 
 pub struct Timer16 {
@@ -68,14 +76,10 @@ pub struct Timer16 {
 
 impl Timer16 {
     pub fn new(addrs: Timer16Addrs) -> Self {
-        // Determine which timer based on addresses
-        let (int_ov, int_compa, int_compb, int_compc) = if addrs.tccr_a == 0x80 {
-            // Timer1
-            (super::INT_TIMER1_OVF, super::INT_TIMER1_COMPA, super::INT_TIMER1_COMPB, super::INT_TIMER1_COMPC)
-        } else {
-            // Timer3
-            (super::INT_TIMER3_OVF, super::INT_TIMER3_COMPA, super::INT_TIMER3_COMPB, super::INT_TIMER3_COMPC)
-        };
+        let int_ov = addrs.int_ovf;
+        let int_compa = addrs.int_compa;
+        let int_compb = addrs.int_compb;
+        let int_compc = addrs.int_compc;
         Timer16 {
             addrs,
             tick: 0,
@@ -97,15 +101,7 @@ impl Timer16 {
 
     pub fn reset(&mut self) {
         let addrs = self.addrs.clone();
-        let int_ov = self.int_ov;
-        let int_compa = self.int_compa;
-        let int_compb = self.int_compb;
-        let int_compc = self.int_compc;
         *self = Timer16::new(addrs);
-        self.int_ov = int_ov;
-        self.int_compa = int_compa;
-        self.int_compb = int_compb;
-        self.int_compc = int_compc;
     }
 
     fn update_state(&mut self) {

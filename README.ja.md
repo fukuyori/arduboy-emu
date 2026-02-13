@@ -1,24 +1,25 @@
 # arduboy-emu
 
-**v0.4.0** — Rust で書かれたサイクル精度の Arduboy エミュレータです。
+**v0.5.0** — Rust で書かれたサイクル精度の Arduboy エミュレータです。
 
-ATmega32u4 マイコン（16 MHz）をディスプレイ、オーディオ、ゲームパッド、Arduboy FX フラッシュ対応でエミュレートします。
+ATmega32u4（Arduboy）と ATmega328P（Gamebuino Classic）マイコン（16 MHz）をディスプレイ、オーディオ、ゲームパッド、Arduboy FX フラッシュ対応でエミュレートします。
 
 ## 特徴
 
+- **デュアル CPU 対応** — ATmega32u4（デフォルト）と ATmega328P（`--cpu 328p`）
 - **AVR CPU コア** — 80以上の命令を正確なフラグ計算で実装（ADD、SUB、SBC/SBCI キャリーチェーン、MUL 等）
 - **SSD1306 OLED ディスプレイ** — 128×64 モノクロ、水平/垂直アドレッシングモード、コントラスト制御、反転表示
-- **PCD8544 LCD** — 84×48 Nokia ディスプレイ（Gamebuino Classic 互換、自動検出）
+- **PCD8544 LCD** — 84×48 Nokia ディスプレイ（Gamebuino Classic 互換、自動検出、328P ではデフォルト）
 - **ステレオオーディオ** — サンプル精度波形レンダリングによる2チャンネル独立出力：
   - 左: Timer3 CTC / Timer4 CTC / GPIO ビットバング (PC6)
   - 右: Timer1 CTC / GPIO ビットバング (PB5)
   - ハイブリッド音声: GPIO ビットバングはサンプル精度PCM、タイマー駆動は矩形波合成フォールバック
 - **ゲームパッド対応** — gilrs によるクロスプラットフォーム対応（Windows/Linux/macOS）、ホットプラグ対応
 - **Arduboy FX** — W25Q128 16 MB SPI フラッシュエミュレーション（Read、Fast Read、JEDEC ID、消去、書込）
-- **ペリフェラル** — Timer0/1/3/4、SPI、ADC、PLL、EEPROM、USB Serial 出力
+- **ペリフェラル** — Timer0/1/2/3/4、SPI、ADC、PLL、EEPROM、USB Serial 出力
 - **デバッガ** — 逆アセンブラ、ブレークポイント、ステップ実行、レジスタダンプ
 - **動的表示** — スケール 1×–6× 切替、フルスクリーン、PNG スクリーンショット（現在の倍率で保存）
-- **USB Serial** — UEDATX レジスタ経由で `Serial.print()` 出力をキャプチャ
+- **USB Serial** — UEDATX レジスタ経由で `Serial.print()` 出力をキャプチャ（32u4 のみ）
 - **ヘッドレスモード** — フレームスナップショットと診断情報による自動テスト
 - **.arduboy ファイル対応** — ZIP アーカイブ（info.json + hex + FX bin）を直接読込
 - **EEPROM 永続化** — ゲーム横に .eep ファイルとして自動保存/復元
@@ -46,6 +47,7 @@ arduboy-emu <file.hex|file.arduboy> [オプション]
 
 オプション:
   --fx <file.bin>    FX フラッシュデータを読み込む
+  --cpu <type>       CPU 種別: 32u4（デフォルト）または 328p（Gamebuino Classic）
   --mute             オーディオを無効化
   --debug            フレームごとの診断情報を表示
   --headless         GUI なしで実行
@@ -120,6 +122,8 @@ game.hex → game.eep（10秒ごと + 終了時に自動保存）
 | FPS 無制限    | F          | —                            | — (60fps ↔ 無制限)            |
 | レジスタダンプ | D          | —                            | —                             |
 | ミュート      | M          | —                            | —                             |
+| ぼかし        | B          | —                            | — (ドットをわずかに平滑化)     |
+| 液晶エフェクト | L          | —                            | — (実機風カラー・グリッド・残像) |
 | 終了          | Escape     | —                            | —                             |
 
 キーボードとゲームパッドの入力は OR 結合されるため、同時に使用できます。

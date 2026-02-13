@@ -1,4 +1,4 @@
-//! ATmega32u4 memory subsystem.
+//! AVR memory subsystem.
 //!
 //! The memory model follows the AVR unified data-space layout:
 //!
@@ -6,13 +6,13 @@
 //! |---------------|---------------------|
 //! | 0x0000–0x001F | General registers R0–R31 |
 //! | 0x0020–0x00FF | I/O + extended I/O registers |
-//! | 0x0100–0x0AFF | SRAM (2560 bytes)   |
+//! | 0x0100+       | SRAM (2560 bytes on 32u4, 2048 bytes on 328P) |
 //!
 //! Flash (32 KB) and EEPROM (1 KB) are separate address spaces.
 
 use crate::{DATA_SIZE, FLASH_SIZE, EEPROM_SIZE};
 
-/// ATmega32u4 memory model containing data space, flash, and EEPROM.
+/// AVR memory model containing data space, flash, and EEPROM.
 pub struct Memory {
     /// Unified data space: registers (0x00-0x1F) + I/O (0x20-0xFF) + SRAM (0x100+)
     pub data: Vec<u8>,
@@ -24,12 +24,20 @@ pub struct Memory {
 
 impl Memory {
     pub fn new() -> Self {
-        let mem = Memory {
+        Memory {
             data: vec![0u8; DATA_SIZE],
             flash: vec![0u8; FLASH_SIZE],
             eeprom: vec![0xFFu8; EEPROM_SIZE],
-        };
-        mem
+        }
+    }
+
+    /// Create memory with a specific data-space size (REG + IO + SRAM).
+    pub fn new_with_size(data_size: usize) -> Self {
+        Memory {
+            data: vec![0u8; data_size],
+            flash: vec![0u8; FLASH_SIZE],
+            eeprom: vec![0xFFu8; EEPROM_SIZE],
+        }
     }
 
     // --- Register access ---

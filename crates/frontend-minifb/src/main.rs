@@ -1,4 +1,4 @@
-//! Arduboy emulator frontend v0.4.0.
+//! Arduboy emulator frontend v0.5.0.
 //!
 //! Provides three execution modes:
 //!
@@ -8,17 +8,14 @@
 //! - **Headless mode** (`--headless`): Automated testing with ASCII snapshots.
 //! - **Step mode** (`--step`): Interactive instruction-level debugger.
 //!
-//! ## v0.4.0 features
-//! - `.arduboy` ZIP file loading (info.json + hex + fx bin)
-//! - EEPROM auto-save/load (.eep file alongside hex, 10s interval)
-//! - PNG screenshots at current scale (S key, monochrome at 1x, RGBA at >1x)
-//! - GIF recording (G key toggle, LZW-compressed animated GIF)
-//! - RGB LED / TX / RX LED status in title bar
-//! - FPS limiter toggle (F key: 60fps ↔ unlimited)
-//! - Hot reload (R key)
-//! - Game browser: N=next, P=previous, O=list games in directory
+//! ## v0.5.0 features
+//! - ATmega328P CPU support (`--cpu 328p`) for Gamebuino Classic / Arduino Uno
+//! - Timer2 (8-bit async) peripheral for ATmega328P
+//! - Gamebuino Classic button mapping (328P pin layout)
+//! - PCD8544 display auto-select for 328P mode
+//! - CPU-conditional Timer3/Timer4 and USB serial
 
-use arduboy_core::{Arduboy, Button, SCREEN_WIDTH, SCREEN_HEIGHT};
+use arduboy_core::{Arduboy, Button, CpuType, DisplayType, SCREEN_WIDTH, SCREEN_HEIGHT};
 use minifb::{Key, Window, WindowOptions, Scale, ScaleMode};
 use gilrs::{Gilrs, Event as GilrsEvent, EventType, Axis, Button as GilrsButton};
 use std::env;
@@ -398,7 +395,7 @@ fn switch_game(
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Arduboy Emulator v0.4.0 - Rust");
+        eprintln!("Arduboy Emulator v0.5.0 - Rust");
         eprintln!("Usage: {} <file.hex|.arduboy> [options]", args[0]);
         eprintln!();
         eprintln!("Supported formats:");
@@ -418,11 +415,12 @@ fn main() {
         eprintln!("  --scale N            Initial scale 1-6 (default 6)");
         eprintln!("  --serial             Show USB serial output on stderr");
         eprintln!("  --no-save            Disable EEPROM auto-save");
+        eprintln!("  --cpu <type>         CPU type: 32u4 (default) or 328p");
         eprintln!();
         eprintln!("GUI keys: Arrows=D-pad Z=A X=B  1-6=Scale F11=Fullscreen");
         eprintln!("          S=Screenshot(PNG) G=GIF record D=RegDump");
-        eprintln!("          M=Mute F=FPS unlimited R=Reload");
-        eprintln!("          N=Next game P=Previous game O=List games");
+        eprintln!("          M=Mute F=FPS unlimited B=Blur L=LCD effect");
+        eprintln!("          R=Reload N=Next game P=Previous game O=List games");
         eprintln!("          Esc=Quit");
         std::process::exit(1);
     }
@@ -446,12 +444,24 @@ fn main() {
         .and_then(|i| args.get(i + 1))
         .map(|s| s.as_str());
 
+    let cpu_type: CpuType = args.iter()
+        .position(|a| a == "--cpu")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| match s.as_str() {
+            "328p" | "328P" | "atmega328p" => CpuType::Atmega328p,
+            _ => CpuType::Atmega32u4,
+        })
+        .unwrap_or(CpuType::Atmega32u4);
+
     // Load game (hex or .arduboy)
     let game = load_game_file(game_path, fx_override, debug)
         .expect("Failed to load game file");
 
-    let mut arduboy = Arduboy::new();
+    let mut arduboy = Arduboy::new_with_cpu(cpu_type);
     arduboy.debug = debug;
+    if debug && cpu_type == CpuType::Atmega328p {
+        eprintln!("CPU: ATmega328P (Gamebuino Classic mode)");
+    }
     let size = arduboy.load_hex(&game.hex_str).expect("Failed to parse HEX");
     if debug { eprintln!("Loaded {} bytes into flash", size); }
 
@@ -509,8 +519,8 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
     let mut scaled_w = SCREEN_WIDTH * scale;
     let mut scaled_h = SCREEN_HEIGHT * scale;
     let make_title = |game_t: &str| -> String {
-        if game_t.is_empty() { "Arduboy v0.4.0".to_string() }
-        else { format!("Arduboy v0.4.0 - {}", game_t) }
+        if game_t.is_empty() { "Arduboy v0.5.0".to_string() }
+        else { format!("Arduboy v0.5.0 - {}", game_t) }
     };
     let mut title_base = make_title(game_title);
 
@@ -569,6 +579,13 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
     let mut prev_n = false;
     let mut prev_p = false;
     let mut prev_o = false;
+    let mut prev_b = false;
+    let mut blur_enabled = false;
+    let mut blur_buf = vec![0u32; scaled_w * scaled_h];
+    let mut prev_l = false;
+    let mut lcd_effect = false;
+    // Temporal blend buffer for PCD8544 ghosting (128×64 float RGB)
+    let mut prev_frame: Vec<(f32, f32, f32)> = vec![(0.0, 0.0, 0.0); SCREEN_WIDTH * SCREEN_HEIGHT];
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         if let Some(ref mut g) = gilrs { poll_gamepad(g, &mut gp, debug); }
@@ -626,6 +643,22 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
             }
         }
         prev_f = fk;
+
+        // Blur toggle (B)
+        let bk = window.is_key_down(Key::B);
+        if bk && !prev_b {
+            blur_enabled = !blur_enabled;
+            eprintln!("Blur: {}", if blur_enabled { "ON" } else { "OFF" });
+        }
+        prev_b = bk;
+
+        // LCD effect toggle (L)
+        let lk = window.is_key_down(Key::L);
+        if lk && !prev_l {
+            lcd_effect = !lcd_effect;
+            eprintln!("LCD effect: {}", if lcd_effect { "ON" } else { "OFF" });
+        }
+        prev_l = lk;
 
         // Mute (M)
         let m = window.is_key_down(Key::M);
@@ -830,21 +863,212 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
             last_eeprom_save = Instant::now();
         }
 
-        // Render
-        let pixels = arduboy.framebuffer_u32();
+        // Adapt buffer to window resize (maintain 2:1 aspect ratio)
+        if !fullscreen {
+            let (win_w, win_h) = window.get_size();
+            let fit_scale_w = win_w / SCREEN_WIDTH;
+            let fit_scale_h = win_h / SCREEN_HEIGHT;
+            let fit_scale = fit_scale_w.min(fit_scale_h).max(1).min(12);
+            let new_w = SCREEN_WIDTH * fit_scale;
+            let new_h = SCREEN_HEIGHT * fit_scale;
+            if new_w != scaled_w || new_h != scaled_h {
+                scale = fit_scale.min(6).max(1);
+                scaled_w = new_w;
+                scaled_h = new_h;
+                scaled_buf.resize(scaled_w * scaled_h, 0);
+            }
+        }
+
+        // ── Render pipeline ──────────────────────────────────────────────
+        let raw_pixels = arduboy.framebuffer_u32();
         let cur_scale = scaled_w / SCREEN_WIDTH;
-        for y in 0..SCREEN_HEIGHT {
-            for x in 0..SCREEN_WIDTH {
-                let c = pixels[y * SCREEN_WIDTH + x];
-                for sy in 0..cur_scale {
-                    let base = (y * cur_scale + sy) * scaled_w + x * cur_scale;
-                    for sx in 0..cur_scale {
-                        if base + sx < scaled_buf.len() { scaled_buf[base + sx] = c; }
+        let is_pcd = matches!(arduboy.display_type, DisplayType::Pcd8544);
+
+        // (1) Color palette + (3) Temporal blend → lcd_pixels 128×64
+        if lcd_effect {
+            // SSD1306 OLED palette: ON → blue-white, OFF → near-black
+            // PCD8544 LCD palette:  ON → dark gray-green, OFF → yellow-green
+            let (col_on, col_off): ((f32,f32,f32), (f32,f32,f32)) = if is_pcd {
+                ((0x3C as f32, 0x48 as f32, 0x28 as f32),
+                 (0xC0 as f32, 0xD8 as f32, 0x78 as f32))
+            } else {
+                ((0xA0 as f32, 0xD0 as f32, 0xFF as f32),
+                 (0x05 as f32, 0x05 as f32, 0x08 as f32))
+            };
+            // Temporal blend factor: PCD8544 20% previous, SSD1306 5%
+            let ghost = if is_pcd { 0.20f32 } else { 0.05f32 };
+            let fresh = 1.0 - ghost;
+
+            for i in 0..(SCREEN_WIDTH * SCREEN_HEIGHT) {
+                let raw = raw_pixels[i];
+                // Determine if pixel is "on" (any channel > 0x40)
+                let on = (raw & 0xFFFFFF) > 0x404040;
+                let (tr, tg, tb) = if on { col_on } else { col_off };
+                // Blend with previous frame
+                let (pr, pg, pb) = prev_frame[i];
+                let nr = tr * fresh + pr * ghost;
+                let ng = tg * fresh + pg * ghost;
+                let nb = tb * fresh + pb * ghost;
+                prev_frame[i] = (nr, ng, nb);
+            }
+
+            // Scale up from prev_frame
+            for y in 0..SCREEN_HEIGHT {
+                for x in 0..SCREEN_WIDTH {
+                    let (fr, fg, fb) = prev_frame[y * SCREEN_WIDTH + x];
+                    let c = ((fr as u32) << 16) | ((fg as u32) << 8) | (fb as u32);
+                    for sy in 0..cur_scale {
+                        let base = (y * cur_scale + sy) * scaled_w + x * cur_scale;
+                        for sx in 0..cur_scale {
+                            if base + sx < scaled_buf.len() { scaled_buf[base + sx] = c; }
+                        }
+                    }
+                }
+            }
+
+            // (2) Pixel grid lines + (4) Corner rounding (need scale ≥ 3)
+            if cur_scale >= 3 {
+                // Grid line darkness: darken the last row and column of each pixel cell
+                let grid_dim = if is_pcd { 0.55f32 } else { 0.70f32 };
+                // Corner darkness
+                let corner_dim = if is_pcd { 0.40f32 } else { 0.50f32 };
+
+                for py in 0..SCREEN_HEIGHT {
+                    for px in 0..SCREEN_WIDTH {
+                        let bx = px * cur_scale;
+                        let by = py * cur_scale;
+
+                        for sy in 0..cur_scale {
+                            for sx in 0..cur_scale {
+                                let gx = bx + sx;
+                                let gy = by + sy;
+                                let idx = gy * scaled_w + gx;
+                                if idx >= scaled_buf.len() { continue; }
+
+                                // Is this sub-pixel on a grid edge?
+                                let on_right = sx == cur_scale - 1;
+                                let on_bottom = sy == cur_scale - 1;
+                                // Is this sub-pixel a corner of the pixel block?
+                                let is_corner = (sx == 0 || sx == cur_scale - 1)
+                                             && (sy == 0 || sy == cur_scale - 1);
+                                // Skip the very inner area
+                                let is_inner_corner = (sx == 0 && sy == 0)
+                                    || (sx == 0 && sy == cur_scale - 1)
+                                    || (sx == cur_scale - 1 && sy == 0)
+                                    || (sx == cur_scale - 1 && sy == cur_scale - 1);
+
+                                let dim = if is_inner_corner {
+                                    corner_dim
+                                } else if on_right || on_bottom {
+                                    grid_dim
+                                } else {
+                                    1.0
+                                };
+
+                                if dim < 1.0 {
+                                    let c = scaled_buf[idx];
+                                    let r = (((c >> 16) & 0xFF) as f32 * dim) as u32;
+                                    let g = (((c >> 8) & 0xFF) as f32 * dim) as u32;
+                                    let b = ((c & 0xFF) as f32 * dim) as u32;
+                                    scaled_buf[idx] = (r << 16) | (g << 8) | b;
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if cur_scale == 2 {
+                // At 2× only do subtle grid on right/bottom edge
+                let grid_dim = if is_pcd { 0.70f32 } else { 0.80f32 };
+                for py in 0..SCREEN_HEIGHT {
+                    for px in 0..SCREEN_WIDTH {
+                        let bx = px * 2;
+                        let by = py * 2;
+                        // Right column
+                        for sy in 0..2 {
+                            let idx = (by + sy) * scaled_w + bx + 1;
+                            if idx < scaled_buf.len() {
+                                let c = scaled_buf[idx];
+                                let r = (((c >> 16) & 0xFF) as f32 * grid_dim) as u32;
+                                let g = (((c >> 8) & 0xFF) as f32 * grid_dim) as u32;
+                                let b = ((c & 0xFF) as f32 * grid_dim) as u32;
+                                scaled_buf[idx] = (r << 16) | (g << 8) | b;
+                            }
+                        }
+                        // Bottom row
+                        for sx in 0..2 {
+                            let idx = (by + 1) * scaled_w + bx + sx;
+                            if idx < scaled_buf.len() {
+                                let c = scaled_buf[idx];
+                                let r = (((c >> 16) & 0xFF) as f32 * grid_dim) as u32;
+                                let g = (((c >> 8) & 0xFF) as f32 * grid_dim) as u32;
+                                let b = ((c & 0xFF) as f32 * grid_dim) as u32;
+                                scaled_buf[idx] = (r << 16) | (g << 8) | b;
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // Normal rendering (no LCD effect)
+            for y in 0..SCREEN_HEIGHT {
+                for x in 0..SCREEN_WIDTH {
+                    let c = raw_pixels[y * SCREEN_WIDTH + x];
+                    for sy in 0..cur_scale {
+                        let base = (y * cur_scale + sy) * scaled_w + x * cur_scale;
+                        for sx in 0..cur_scale {
+                            if base + sx < scaled_buf.len() { scaled_buf[base + sx] = c; }
+                        }
                     }
                 }
             }
         }
-        window.update_with_buffer(&scaled_buf, scaled_w, scaled_h).expect("update");
+
+        // Soft blur pass (B key toggle) — applied after LCD effects
+        if blur_enabled && cur_scale >= 2 {
+            if blur_buf.len() != scaled_buf.len() {
+                blur_buf.resize(scaled_buf.len(), 0);
+            }
+            let w = scaled_w;
+            let h = scaled_h;
+            for y in 0..h {
+                for x in 0..w {
+                    let idx = y * w + x;
+                    let c = scaled_buf[idx];
+                    let cr = (c >> 16) & 0xFF;
+                    let cg = (c >> 8) & 0xFF;
+                    let cb = c & 0xFF;
+                    let (mut sr, mut sg, mut sb) = (cr * 4, cg * 4, cb * 4);
+                    for &(dx, dy) in &[(0isize, -1isize), (0, 1), (-1, 0), (1, 0)] {
+                        let nx = x as isize + dx;
+                        let ny = y as isize + dy;
+                        if nx >= 0 && nx < w as isize && ny >= 0 && ny < h as isize {
+                            let n = scaled_buf[ny as usize * w + nx as usize];
+                            sr += ((n >> 16) & 0xFF) * 2;
+                            sg += ((n >> 8) & 0xFF) * 2;
+                            sb += (n & 0xFF) * 2;
+                        } else {
+                            sr += cr * 2; sg += cg * 2; sb += cb * 2;
+                        }
+                    }
+                    for &(dx, dy) in &[(-1isize, -1isize), (1, -1), (-1, 1), (1, 1)] {
+                        let nx = x as isize + dx;
+                        let ny = y as isize + dy;
+                        if nx >= 0 && nx < w as isize && ny >= 0 && ny < h as isize {
+                            let n = scaled_buf[ny as usize * w + nx as usize];
+                            sr += (n >> 16) & 0xFF;
+                            sg += (n >> 8) & 0xFF;
+                            sb += n & 0xFF;
+                        } else {
+                            sr += cr; sg += cg; sb += cb;
+                        }
+                    }
+                    blur_buf[idx] = ((sr / 16) << 16) | ((sg / 16) << 8) | (sb / 16);
+                }
+            }
+            window.update_with_buffer(&blur_buf, scaled_w, scaled_h).expect("update");
+        } else {
+            window.update_with_buffer(&scaled_buf, scaled_w, scaled_h).expect("update");
+        }
 
         if last_fps_time.elapsed() >= Duration::from_secs(2) {
             let fps = fps_frames as f64 / last_fps_time.elapsed().as_secs_f64();
@@ -862,8 +1086,10 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
             } else { String::new() };
             let tx = if arduboy.led_tx { " TX" } else { "" };
             let rx = if arduboy.led_rx { " RX" } else { "" };
-            window.set_title(&format!("{} - {:.0} FPS{}{}{}{}{}{}{} ({}x)",
-                title_base, fps, ti, ms, fs, rec, led, tx, rx, cur_scale));
+            let lcd = if lcd_effect { " [LCD]" } else { "" };
+            let blr = if blur_enabled { " [BLUR]" } else { "" };
+            window.set_title(&format!("{} - {:.0} FPS{}{}{}{}{}{}{}{}{} ({}x)",
+                title_base, fps, ti, ms, fs, rec, led, tx, rx, lcd, blr, cur_scale));
             fps_frames = 0;
             last_fps_time = Instant::now();
         }
