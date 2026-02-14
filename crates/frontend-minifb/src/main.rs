@@ -1,4 +1,4 @@
-//! Arduboy emulator frontend v0.7.0.
+//! Arduboy emulator frontend v0.7.1.
 //!
 //! Provides four execution modes:
 //!
@@ -11,7 +11,7 @@
 //! - **GDB mode** (`--gdb <port>`): GDB Remote Serial Protocol server for
 //!   connection from avr-gdb or compatible clients.
 //!
-//! ## v0.7.0 features
+//! ## v0.7.1 features
 //! - Interactive debugger: `ram`, `io`, `w` (watchpoint), `prof`, `snap`/`ramdiff`
 //! - Execution profiler: PC histogram, hotspot analysis, call graph tracking
 //! - GDB Remote Serial Protocol server (`--gdb <port>`)
@@ -465,7 +465,7 @@ fn switch_game(
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Arduboy Emulator v0.7.0 - Rust");
+        eprintln!("Arduboy Emulator v0.7.1 - Rust");
         eprintln!("Usage: {} <file.hex|.arduboy|.elf> [options]", args[0]);
         eprintln!();
         eprintln!("Supported formats:");
@@ -496,7 +496,7 @@ fn main() {
         eprintln!("GUI keys: Arrows=D-pad Z=A X=B  1-6=Scale F11=Fullscreen");
         eprintln!("          S=Screenshot(PNG) G=GIF record D=RegDump T=Profiler");
         eprintln!("          M=Mute F=FPS unlimited B=Blur L=LCD effect A=Audio filter");
-        eprintln!("          R=Reload N=Next game P=Previous game O=List games");
+        eprintln!("          V=Portrait rotation  R=Reload N=Next P=Previous O=List games");
         eprintln!("          Backspace=Rewind  Esc=Quit");
         std::process::exit(1);
     }
@@ -668,8 +668,8 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
     let mut scaled_w = SCREEN_WIDTH * scale;
     let mut scaled_h = SCREEN_HEIGHT * scale;
     let make_title = |game_t: &str| -> String {
-        if game_t.is_empty() { "Arduboy v0.7.0".to_string() }
-        else { format!("Arduboy v0.7.0 - {}", game_t) }
+        if game_t.is_empty() { "Arduboy v0.7.1".to_string() }
+        else { format!("Arduboy v0.7.1 - {}", game_t) }
     };
     let mut title_base = make_title(game_title);
 
@@ -735,6 +735,9 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
     let mut lcd_effect = lcd_start;
     let mut prev_t = false;
     let mut prev_a = false;
+    let mut prev_v = false;
+    let mut portrait = false;
+    let mut rot_buf: Vec<u32> = Vec::new();
     // Temporal blend buffer for PCD8544 ghosting (128×64 float RGB)
     let mut prev_frame: Vec<(f32, f32, f32)> = vec![(0.0, 0.0, 0.0); SCREEN_WIDTH * SCREEN_HEIGHT];
 
@@ -757,8 +760,9 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
                 scaled_w = SCREEN_WIDTH * scale;
                 scaled_h = SCREEN_HEIGHT * scale;
                 scaled_buf.resize(scaled_w * scaled_h, 0);
+                let (ww, wh) = if portrait { (scaled_h, scaled_w) } else { (scaled_w, scaled_h) };
                 window = Window::new(
-                    &title_base, scaled_w, scaled_h,
+                    &title_base, ww, wh,
                     WindowOptions { scale: Scale::X1, scale_mode: ScaleMode::AspectRatioStretch, resize: true, ..Default::default() },
                 ).expect("window");
                 if fps_unlimited { window.set_target_fps(0); } else { window.set_target_fps(60); }
@@ -778,9 +782,10 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
                 scaled_h = SCREEN_HEIGHT * scale;
             }
             scaled_buf.resize(scaled_w * scaled_h, 0);
+            let (ww, wh) = if portrait { (scaled_h, scaled_w) } else { (scaled_w, scaled_h) };
             let mut opts = WindowOptions { scale: Scale::X1, scale_mode: ScaleMode::AspectRatioStretch, resize: true, ..Default::default() };
             if fullscreen { opts.borderless = true; }
-            window = Window::new(&title_base, scaled_w, scaled_h, opts).expect("window");
+            window = Window::new(&title_base, ww, wh, opts).expect("window");
             if fps_unlimited { window.set_target_fps(0); } else { window.set_target_fps(60); }
         }
         prev_f11 = f11;
@@ -849,6 +854,18 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
             eprintln!("Audio filter: {}", if arduboy.audio_buf.filters_enabled { "ON" } else { "OFF" });
         }
         prev_a = ak;
+
+        // Portrait rotation toggle (V)
+        let vk = window.is_key_down(Key::V);
+        if vk && !prev_v {
+            portrait = !portrait;
+            eprintln!("Portrait: {}", if portrait { "ON" } else { "OFF" });
+            let (ww, wh) = if portrait { (scaled_h, scaled_w) } else { (scaled_w, scaled_h) };
+            let opts = WindowOptions { scale: Scale::X1, scale_mode: ScaleMode::AspectRatioStretch, resize: true, ..Default::default() };
+            window = Window::new(&title_base, ww, wh, opts).expect("window");
+            if fps_unlimited { window.set_target_fps(0); } else { window.set_target_fps(60); }
+        }
+        prev_v = vk;
 
         // Screenshot (S) — PNG at current scale
         let s = window.is_key_down(Key::S);
@@ -1094,11 +1111,16 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
             last_eeprom_save = Instant::now();
         }
 
-        // Adapt buffer to window resize (maintain 2:1 aspect ratio)
+        // Adapt buffer to window resize (maintain aspect ratio)
         if !fullscreen {
             let (win_w, win_h) = window.get_size();
-            let fit_scale_w = win_w / SCREEN_WIDTH;
-            let fit_scale_h = win_h / SCREEN_HEIGHT;
+            let (base_w, base_h) = if portrait {
+                (SCREEN_HEIGHT, SCREEN_WIDTH)
+            } else {
+                (SCREEN_WIDTH, SCREEN_HEIGHT)
+            };
+            let fit_scale_w = win_w / base_w;
+            let fit_scale_h = win_h / base_h;
             let fit_scale = fit_scale_w.min(fit_scale_h).max(1).min(12);
             let new_w = SCREEN_WIDTH * fit_scale;
             let new_h = SCREEN_HEIGHT * fit_scale;
@@ -1252,7 +1274,8 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
         }
 
         // Soft blur pass (B key toggle) — applied after LCD effects
-        if blur_enabled && cur_scale >= 2 {
+        let use_blur = blur_enabled && cur_scale >= 2;
+        if use_blur {
             if blur_buf.len() != scaled_buf.len() {
                 blur_buf.resize(scaled_buf.len(), 0);
             }
@@ -1293,9 +1316,25 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
                     blur_buf[idx] = ((sr / 16) << 16) | ((sg / 16) << 8) | (sb / 16);
                 }
             }
-            window.update_with_buffer(&blur_buf, scaled_w, scaled_h).expect("update");
+        }
+
+        // Display output (with optional portrait rotation)
+        let final_src = if use_blur { &blur_buf } else { &scaled_buf };
+        if portrait {
+            // Rotate 90° CCW: left side → bottom (portrait orientation)
+            let rw = scaled_h;  // rotated width  = landscape height
+            let rh = scaled_w;  // rotated height = landscape width
+            rot_buf.resize(rw * rh, 0);
+            for y in 0..scaled_h {
+                for x in 0..scaled_w {
+                    let nx = y;
+                    let ny = scaled_w - 1 - x;
+                    rot_buf[ny * rw + nx] = final_src[y * scaled_w + x];
+                }
+            }
+            window.update_with_buffer(&rot_buf, rw, rh).expect("update");
         } else {
-            window.update_with_buffer(&scaled_buf, scaled_w, scaled_h).expect("update");
+            window.update_with_buffer(final_src, scaled_w, scaled_h).expect("update");
         }
 
         if last_fps_time.elapsed() >= Duration::from_secs(2) {
@@ -1318,8 +1357,9 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
             let blr = if blur_enabled { " [BLUR]" } else { "" };
             let prf = if arduboy.profiler.enabled { " [PROF]" } else { "" };
             let flt = if arduboy.audio_buf.filters_enabled { " [FILT]" } else { "" };
-            window.set_title(&format!("{} - {:.0} FPS{}{}{}{}{}{}{}{}{}{}{} ({}x)",
-                title_base, fps, ti, ms, fs, rec, led, tx, rx, lcd, blr, prf, flt, cur_scale));
+            let prt = if portrait { " [PORT]" } else { "" };
+            window.set_title(&format!("{} - {:.0} FPS{}{}{}{}{}{}{}{}{}{}{}{} ({}x)",
+                title_base, fps, ti, ms, fs, rec, led, tx, rx, lcd, blr, prf, flt, prt, cur_scale));
             fps_frames = 0;
             last_fps_time = Instant::now();
         }
@@ -1355,7 +1395,7 @@ fn run_step_mode(args: &[String], arduboy: &mut Arduboy) {
         .and_then(|s| s.parse().ok())
         .unwrap_or(100_000);
 
-    println!("Interactive Debugger v0.7.0");
+    println!("Interactive Debugger v0.7.1");
     println!("Commands:");
     println!("  <Enter>/<N>  Step 1 or N instructions");
     println!("  r/run        Run to breakpoint/watchpoint");

@@ -1,6 +1,6 @@
 # arduboy-emu
 
-**v0.7.0** — Rust で書かれたサイクル精度の Arduboy エミュレータです。
+**v0.7.1** — Rust で書かれたサイクル精度の Arduboy エミュレータです。
 
 ATmega32u4（Arduboy）と ATmega328P（Gamebuino Classic）マイコン（16 MHz）をエミュレートします。対話型デバッガ、実行プロファイラ、avr-gdb 用 GDB サーバを搭載。
 
@@ -40,6 +40,18 @@ sudo apt install libudev-dev libasound2-dev
 # ビルドと実行
 cargo build --release
 cargo run --release -- game.hex
+```
+
+### インストーラー作成
+
+各プラットフォーム向けインストーラービルドスクリプトを同梱。詳細は [BUILDING.md](BUILDING.md) を参照。
+
+```bash
+./build-installers.sh                            # OS自動検出
+installers\windows\build-windows.bat             # Windows (.exe, Inno Setup)
+./installers/linux/build-linux.sh --deb          # Debian/Ubuntu (.deb)
+./installers/linux/build-linux.sh --rpm          # Fedora/RHEL (.rpm)
+./installers/macos/build-macos.sh --universal    # macOS (.pkg + .dmg, ユニバーサル)
 ```
 
 ## 使い方
@@ -132,6 +144,7 @@ game.hex → game.eep（10秒ごと + 終了時に自動保存）
 | 音声フィルタ  | A          | —                            | — (LPF/エンベロープ/クロスフィード) |
 | ぼかし        | B          | —                            | — (ドットをわずかに平滑化)     |
 | 液晶エフェクト | L          | —                            | — (実機風カラー・グリッド・残像) |
+| 縦画面        | V          | —                            | — (90°回転、左が下)           |
 | プロファイラ  | T          | —                            | — (実行プロファイラ ON/OFF)    |
 | 巻き戻し     | Backspace  | —                            | — (長押しで最大5分巻き戻し)   |
 | 終了          | Escape     | —                            | —                             |

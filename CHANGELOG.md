@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2025-02-14
+
+### Added
+
+- **PWM DAC audio** — Gamebuino Classic games using Timer2 Fast PWM on OC2B (PD3) for analog audio output are now supported. OCR2B sample values are recorded with CPU-tick timestamps and resampled via sample-and-hold interpolation through the full DSP pipeline.
+- **Portrait rotation** (V key) — Rotates display 90° CCW (left side becomes bottom). Works with all rendering modes. Title bar shows `[PORT]` indicator.
+- **Timer2 prescaler table** — ATmega328P Timer2 has a different prescaler mapping from Timer0 (CS3=/32 vs /64). Added `is_timer2` flag for correct lookup.
+- **Installer build scripts** — Cross-platform packaging for distribution:
+  - Windows: Inno Setup `.iss` script + `build-windows.bat` → `.exe` installer with Start Menu, desktop icon, file associations
+  - Linux: `build-linux.sh` → `.deb` (Debian/Ubuntu) and `.rpm` (Fedora/RHEL) with desktop entry, MIME types, AppStream metadata
+  - macOS: `build-macos.sh` → `.app` bundle + `.pkg` installer + `.dmg` disk image, with universal binary support (`--universal`) and code signing (`--sign`)
+  - GitHub Actions workflow (`.github/workflows/release.yml`) for automated CI/CD builds on tag push
+
+### Changed
+
+- Version bumped to 0.7.1
+- Audio buffer expanded with PWM sample path (`push_pwm_sample`, `sample_pwm`)
+
 ## [0.7.0] - 2025-02-13
 
 ### Added
@@ -20,13 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Ring buffer of 600 snapshots (every 0.5s = ~5 min rewind)
   - Saves CPU state, SRAM, EEPROM, display framebuffer
   - `Arduboy::save_snapshot()` / `restore_snapshot()` API
-- **Audio post-processing pipeline** (`audio_buffer.rs`, ~465 lines) — Five-stage DSP chain:
+- **Audio post-processing pipeline** (`audio_buffer.rs`, ~395 lines) — Five-stage DSP chain:
   - Sub-sample edge interpolation: time-weighted integration eliminates aliasing
   - Butterworth LPF (8 kHz): simulates piezo speaker bandwidth rolloff
   - DC-blocking HPF (20 Hz): removes sub-audible drift from LPF
   - Click suppression envelope: 2 ms attack / 5 ms release fade
   - Stereo crossfeed: 20% opposite-channel blend for natural headphone listening
-  - PWM DAC mode: sample-and-hold resampling for Timer2 OCR2B-based analog audio
   - **A key** toggles filters on/off at runtime, `[FILT]` indicator in title bar
 - **`--lcd`** CLI option to start with LCD display effect enabled
 - **`--no-blur`** CLI option to start with blur filter disabled
@@ -39,8 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Gamebuino Classic audio silent** — Two sound generation methods are now supported for ATmega328P: (1) GPIO toggle via `SBI PIND,3` in Timer2 ISR, and (2) **PWM DAC** where Timer1 ISR writes audio samples to OCR2B while Timer2 runs in Fast PWM mode on PD3(OC2B). The PWM DAC path (used by games like 101 Stars) records 8-bit sample values with CPU-tick timestamps, performs sample-and-hold interpolation during resampling, and feeds through the full post-processing pipeline (LPF, DC-blocking HPF, envelope, crossfeed).
-- **Timer2 prescaler table wrong** — Timer8 used Timer0's prescaler mapping (CS3=/64) for Timer2, but ATmega328P Timer2 has a different table (CS3=/32, CS4=/64, CS5=/128, CS6=/256, CS7=/1024). Added `is_timer2` flag to `Timer8Addrs` to select the correct prescaler lookup.
+- **Gamebuino Classic audio silent** — ATmega328P speaker pin PD3 (Arduino D3) had no edge detection in the PORTD write handler. Gamebuino's sound library uses Timer2 COMPA ISR to toggle PD3 via `SBI PIND,3`, but the emulator only tracked PC6 (32u4 Arduboy speaker). Added PD3 edge detection for 328P mode, reusing the speaker1 state fields (PC6 is unused on 328P). Audio now flows through the full sample-accurate pipeline including LPF, envelope, and crossfeed.
 - **Gamebuino Classic black screen** — PCD8544 DC/CS pin mapping was wrong. Binary analysis of 3D-DEMO.HEX revealed the actual Gamebuino Classic pin assignment: DC=A2(PC2), CS=A1(PC1), RST=A0(PC0). The emulator had DC=PC0 (confusing DC with RST). The `digitalWrite` function writes port registers via `ST X` (indirect store through pin lookup tables in flash), going through `write_data()`. Fixed by setting correct default pin mapping (DC=PC2, CS=PC1) for ATmega328P, with runtime auto-detection fallback for non-standard pin configurations.
 - **Timer8 interrupt priority order** — Timer8 `check_interrupt()` fired TOV before COMPA/COMPB, but ATmega328P datasheet specifies COMPA > COMPB > OVF. Reordered to match hardware. Affects Timer2 COMPA-driven audio on Gamebuino where incorrect priority could delay sound ISR dispatch.
 - **FX games black screen** — SPI bus routing was exclusive (FX **or** display), but real hardware has a shared bus where both chips receive all bytes simultaneously. Display commands sent while FX CS was coincidentally LOW (e.g., during boot before explicit deselect) were swallowed by the FX state machine and never reached the SSD1306. Now both targets are routed independently, matching real hardware behavior.

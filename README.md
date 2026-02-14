@@ -1,6 +1,6 @@
 # arduboy-emu
 
-**v0.7.0** — A cycle-accurate Arduboy emulator written in Rust.
+**v0.7.1** — A cycle-accurate Arduboy emulator written in Rust.
 
 Emulates the ATmega32u4 (Arduboy) and ATmega328P (Gamebuino Classic) microcontrollers at 16 MHz with display, audio, gamepad, and Arduboy FX flash support. Includes an interactive debugger, execution profiler, and GDB server for avr-gdb integration.
 
@@ -40,6 +40,18 @@ sudo apt install libudev-dev libasound2-dev
 # Build and run
 cargo build --release
 cargo run --release -- game.hex
+```
+
+### Creating Installers
+
+Pre-built installer scripts for all platforms. See [BUILDING.md](BUILDING.md) for full details.
+
+```bash
+./build-installers.sh                            # Auto-detect OS
+installers\windows\build-windows.bat             # Windows (.exe via Inno Setup)
+./installers/linux/build-linux.sh --deb          # Debian/Ubuntu (.deb)
+./installers/linux/build-linux.sh --rpm          # Fedora/RHEL (.rpm)
+./installers/macos/build-macos.sh --universal    # macOS (.pkg + .dmg, universal)
 ```
 
 ## Usage
@@ -131,6 +143,7 @@ Press **O** to list all `.hex` and `.arduboy` files in the game's directory, the
 | Audio filter| A          | —                           | — (LPF/envelope/crossfeed)    |
 | Blur       | B          | —                           | — (soft pixel smoothing)      |
 | LCD effect | L          | —                           | — (display-accurate colors)   |
+| Portrait   | V          | —                           | — (rotate 90° left→bottom)    |
 | Profiler   | T          | —                           | — (toggle execution profiler) |
 | Rewind     | Backspace  | —                           | — (hold to rewind ~5 min)     |
 | Quit       | Escape     | —                           | —                             |
