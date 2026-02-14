@@ -272,6 +272,15 @@ impl Arduboy {
                 self.cpu.sreg = (self.cpu.sreg & 0b1111_1100) | (z << 1) | c;
                 sync_sreg(&self.cpu, &mut self.mem); 2
             }
+            Instruction::Fmulsu { d, r } => {
+                // Rd signed × Rr unsigned, result << 1
+                let res = (((self.mem.reg(d) as i8 as i16) * (self.mem.reg(r) as i16)) << 1) as u16;
+                self.mem.set_reg(0, res as u8); self.mem.set_reg(1, (res >> 8) as u8);
+                let c = if res & 0x8000 != 0 { 1u8 } else { 0 };
+                let z = if res == 0 { 1u8 } else { 0 };
+                self.cpu.sreg = (self.cpu.sreg & 0b1111_1100) | (z << 1) | c;
+                sync_sreg(&self.cpu, &mut self.mem); 2
+            }
             Instruction::Adiw { d, k } => {
                 let pi = (d - 24) / 2; let val = self.mem.reg_pair(pi);
                 let res = val.wrapping_add(k as u16);
@@ -487,6 +496,17 @@ impl Arduboy {
                 self.push_word(ret);
                 self.cpu.pc = self.mem.z(); 3
             }
+            Instruction::Eijmp => {
+                // PC ← EIND:Z — EIND only matters for >128KB flash (not applicable here)
+                let z = self.mem.z();
+                self.cpu.pc = z; 2
+            }
+            Instruction::Eicall => {
+                let ret = self.cpu.pc;
+                self.push_word(ret);
+                let z = self.mem.z();
+                self.cpu.pc = z; 4
+            }
             Instruction::Cpse { d, r } => {
                 if self.mem.reg(d) == self.mem.reg(r) {
                     skip_next(&mut self.cpu, &self.mem); return 2;
@@ -606,6 +626,14 @@ impl Arduboy {
             // -- Misc --
             Instruction::Sleep => { self.cpu.sleeping = true; 1 }
             Instruction::Wdr => { 1 }
+            Instruction::Break => {
+                // Debug break — trigger breakpoint_hit
+                self.breakpoint_hit = true; 1
+            }
+            Instruction::Spm => {
+                // Store Program Memory — NOP in emulator (bootloader only)
+                1
+            }
             Instruction::Unknown(w) => { 
                 if self.debug {
                     eprintln!("UNKNOWN OPCODE 0x{:04X} at pc=0x{:04X}", w, self.cpu.pc.wrapping_sub(1));

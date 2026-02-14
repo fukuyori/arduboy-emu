@@ -1,21 +1,25 @@
-//! Arduboy emulator frontend v0.5.0.
+//! Arduboy emulator frontend v0.7.0.
 //!
-//! Provides three execution modes:
+//! Provides four execution modes:
 //!
 //! - **GUI mode** (default): Scaled window with stereo audio, keyboard/gamepad input,
 //!   dynamic scale toggle, PNG screenshot, GIF recording, EEPROM persistence,
-//!   runtime game browser.
+//!   runtime game browser, LCD effect, profiler toggle.
 //! - **Headless mode** (`--headless`): Automated testing with ASCII snapshots.
-//! - **Step mode** (`--step`): Interactive instruction-level debugger.
+//! - **Step mode** (`--step`): Interactive debugger with RAM viewer, I/O register
+//!   viewer, watchpoints, breakpoints, and execution profiler.
+//! - **GDB mode** (`--gdb <port>`): GDB Remote Serial Protocol server for
+//!   connection from avr-gdb or compatible clients.
 //!
-//! ## v0.5.0 features
-//! - ATmega328P CPU support (`--cpu 328p`) for Gamebuino Classic / Arduino Uno
-//! - Timer2 (8-bit async) peripheral for ATmega328P
-//! - Gamebuino Classic button mapping (328P pin layout)
-//! - PCD8544 display auto-select for 328P mode
-//! - CPU-conditional Timer3/Timer4 and USB serial
+//! ## v0.7.0 features
+//! - Interactive debugger: `ram`, `io`, `w` (watchpoint), `prof`, `snap`/`ramdiff`
+//! - Execution profiler: PC histogram, hotspot analysis, call graph tracking
+//! - GDB Remote Serial Protocol server (`--gdb <port>`)
+//! - Data watchpoints (`--watch <addr>` CLI, `w` in step mode)
+//! - LCD effect (L key): display-accurate colors, pixel grid, ghosting, dot rounding
+//! - Profiler toggle (T key) in GUI mode
 
-use arduboy_core::{Arduboy, Button, CpuType, DisplayType, SCREEN_WIDTH, SCREEN_HEIGHT};
+use arduboy_core::{Arduboy, Button, CpuType, DisplayType, SCREEN_WIDTH, SCREEN_HEIGHT, detect_cpu_type};
 use minifb::{Key, Window, WindowOptions, Scale, ScaleMode};
 use gilrs::{Gilrs, Event as GilrsEvent, EventType, Axis, Button as GilrsButton};
 use std::env;
@@ -278,8 +282,11 @@ fn save_eeprom(arduboy: &Arduboy, path: &str, debug: bool) {
 struct LoadedGame {
     hex_str: String,
     fx_data: Option<Vec<u8>>,
+    fx_save: Option<Vec<u8>>,
     title: String,
     hex_path: String,
+    /// Raw ELF bytes (when loading .elf files)
+    elf_data: Option<Vec<u8>>,
 }
 
 fn load_game_file(path: &str, fx_override: Option<&str>, debug: bool) -> Result<LoadedGame, String> {
@@ -296,8 +303,24 @@ fn load_game_file(path: &str, fx_override: Option<&str>, debug: bool) -> Result<
         Ok(LoadedGame {
             hex_str: ab.hex.ok_or("No HEX in .arduboy file")?,
             fx_data: ab.fx_data,
+            fx_save: ab.fx_save,
             title: if ab.title.is_empty() { String::new() } else { ab.title },
             hex_path: path.to_string(),
+            elf_data: None,
+        })
+    } else if lower.ends_with(".elf") {
+        // ELF binary with debug info
+        let data = fs::read(path).map_err(|e| format!("{}: {}", path, e))?;
+        // We store the raw ELF bytes; main() will call load_elf()
+        Ok(LoadedGame {
+            hex_str: String::new(), // not used for ELF
+            fx_data: if let Some(fx_path) = fx_override {
+                Some(fs::read(fx_path).map_err(|e| format!("{}: {}", fx_path, e))?)
+            } else { auto_find_fx(path) },
+            fx_save: None,
+            title: String::new(),
+            hex_path: path.to_string(),
+            elf_data: Some(data),
         })
     } else {
         // Plain .hex file
@@ -313,8 +336,10 @@ fn load_game_file(path: &str, fx_override: Option<&str>, debug: bool) -> Result<
         Ok(LoadedGame {
             hex_str,
             fx_data,
+            fx_save: None,
             title: String::new(),
             hex_path: path.to_string(),
+            elf_data: None,
         })
     }
 }
@@ -330,6 +355,29 @@ fn auto_find_fx(hex_path: &str) -> Option<Vec<u8>> {
     if fx.exists() { fs::read(&fx).ok() } else { None }
 }
 
+/// Load FX data+save into the emulator at the correct flash layout offsets.
+fn load_game_fx(arduboy: &mut Arduboy, game: &LoadedGame, debug: bool) {
+    if let Some(ref fx) = game.fx_data {
+        let save = game.fx_save.as_deref();
+        let (dp, sp) = arduboy.load_fx_layout(fx, save);
+        eprintln!("FX layout: data={} bytes at page 0x{:04X} (byte 0x{:06X}), save at page 0x{:04X}",
+            fx.len(), dp, dp as u32 * 256, sp);
+        if debug {
+            // Verify: print first 16 bytes at data offset
+            let data_off = dp as usize * 256;
+            let end = (data_off + 16).min(arduboy.fx_flash.data.len());
+            if data_off < arduboy.fx_flash.data.len() {
+                let flash_bytes: Vec<String> = arduboy.fx_flash.data[data_off..end].iter()
+                    .map(|b| format!("{:02X}", b)).collect();
+                eprintln!("FX verify: flash[0x{:06X}..] = {}", data_off, flash_bytes.join(" "));
+                let orig: Vec<String> = fx[..16.min(fx.len())].iter()
+                    .map(|b| format!("{:02X}", b)).collect();
+                eprintln!("FX verify: data.bin[0..16]   = {}", orig.join(" "));
+            }
+        }
+    }
+}
+
 // ─── File Browser ──────────────────────────────────────────────────────────
 
 /// Scan a directory for loadable game files (.hex, .arduboy).
@@ -340,7 +388,7 @@ fn scan_game_dir(dir: &str) -> Vec<String> {
         for entry in entries.flatten() {
             if let Ok(name) = entry.file_name().into_string() {
                 let lower = name.to_lowercase();
-                if lower.ends_with(".hex") || lower.ends_with(".arduboy") {
+                if lower.ends_with(".hex") || lower.ends_with(".arduboy") || lower.ends_with(".elf") {
                     games.push(entry.path().to_string_lossy().into_owned());
                 }
             }
@@ -375,9 +423,31 @@ fn switch_game(
         save_eeprom(arduboy, eep_path_old, debug);
     }
     let game = load_game_file(path, None, debug)?;
-    arduboy.reset();
+
+    // Auto-detect CPU type for the new game
+    let mut tmp = vec![0u8; 32768];
+    let detected = if arduboy_core::hex::parse_hex(&game.hex_str, &mut tmp).is_ok() {
+        detect_cpu_type(&tmp)
+    } else {
+        arduboy.cpu_type
+    };
+
+    // If CPU type changed, reinitialize Arduboy entirely
+    if detected != arduboy.cpu_type {
+        let was_debug = arduboy.debug;
+        *arduboy = Arduboy::new_with_cpu(detected);
+        arduboy.debug = was_debug;
+        if detected == CpuType::Atmega328p {
+            eprintln!("CPU: ATmega328P (Gamebuino Classic mode)");
+        } else {
+            eprintln!("CPU: ATmega32u4 (Arduboy mode)");
+        }
+    } else {
+        arduboy.reset();
+    }
+
     arduboy.load_hex(&game.hex_str).map_err(|e| format!("HEX parse: {}", e))?;
-    if let Some(ref fx) = game.fx_data { arduboy.load_fx_data(fx); }
+    load_game_fx(arduboy, &game, debug);
     let new_eep = eeprom_path(&game.hex_path);
     if !no_save { load_eeprom(arduboy, &new_eep, debug); }
     let title = if game.title.is_empty() {
@@ -395,12 +465,13 @@ fn switch_game(
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Arduboy Emulator v0.5.0 - Rust");
-        eprintln!("Usage: {} <file.hex|.arduboy> [options]", args[0]);
+        eprintln!("Arduboy Emulator v0.7.0 - Rust");
+        eprintln!("Usage: {} <file.hex|.arduboy|.elf> [options]", args[0]);
         eprintln!();
         eprintln!("Supported formats:");
         eprintln!("  .hex             Intel HEX binary");
         eprintln!("  .arduboy         ZIP archive (info.json + hex + fx bin)");
+        eprintln!("  .elf             ELF binary with debug symbols (avr-gcc output)");
         eprintln!();
         eprintln!("Options:");
         eprintln!("  --headless           Run without GUI");
@@ -411,17 +482,22 @@ fn main() {
         eprintln!("  --mute               Disable audio");
         eprintln!("  --fx <file.bin>      Load FX flash data");
         eprintln!("  --break <addr>       Breakpoint at hex byte-address (repeatable)");
+        eprintln!("  --watch <addr>       Data watchpoint at hex address (repeatable)");
         eprintln!("  --step               Interactive step debugger");
+        eprintln!("  --gdb <port>         Start GDB remote debug server on TCP port");
+        eprintln!("  --profile            Enable profiler (report on exit)");
         eprintln!("  --scale N            Initial scale 1-6 (default 6)");
         eprintln!("  --serial             Show USB serial output on stderr");
         eprintln!("  --no-save            Disable EEPROM auto-save");
-        eprintln!("  --cpu <type>         CPU type: 32u4 (default) or 328p");
+        eprintln!("  --cpu <type>         CPU type: 32u4 or 328p (auto-detected if omitted)");
+        eprintln!("  --lcd                Start with LCD effect enabled");
+        eprintln!("  --no-blur            Start with blur disabled");
         eprintln!();
         eprintln!("GUI keys: Arrows=D-pad Z=A X=B  1-6=Scale F11=Fullscreen");
-        eprintln!("          S=Screenshot(PNG) G=GIF record D=RegDump");
-        eprintln!("          M=Mute F=FPS unlimited B=Blur L=LCD effect");
+        eprintln!("          S=Screenshot(PNG) G=GIF record D=RegDump T=Profiler");
+        eprintln!("          M=Mute F=FPS unlimited B=Blur L=LCD effect A=Audio filter");
         eprintln!("          R=Reload N=Next game P=Previous game O=List games");
-        eprintln!("          Esc=Quit");
+        eprintln!("          Backspace=Rewind  Esc=Quit");
         std::process::exit(1);
     }
 
@@ -432,6 +508,14 @@ fn main() {
     let step_mode = args.iter().any(|a| a == "--step");
     let serial_enabled = args.iter().any(|a| a == "--serial");
     let no_save = args.iter().any(|a| a == "--no-save");
+    let profile_enabled = args.iter().any(|a| a == "--profile");
+    let lcd_start = args.iter().any(|a| a == "--lcd");
+    let no_blur = args.iter().any(|a| a == "--no-blur");
+
+    let gdb_port: Option<u16> = args.iter()
+        .position(|a| a == "--gdb")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse().ok());
 
     let initial_scale: usize = args.iter()
         .position(|a| a == "--scale")
@@ -444,31 +528,60 @@ fn main() {
         .and_then(|i| args.get(i + 1))
         .map(|s| s.as_str());
 
-    let cpu_type: CpuType = args.iter()
+    let cpu_override: Option<CpuType> = args.iter()
         .position(|a| a == "--cpu")
         .and_then(|i| args.get(i + 1))
         .map(|s| match s.as_str() {
             "328p" | "328P" | "atmega328p" => CpuType::Atmega328p,
             _ => CpuType::Atmega32u4,
-        })
-        .unwrap_or(CpuType::Atmega32u4);
+        });
 
     // Load game (hex or .arduboy)
     let game = load_game_file(game_path, fx_override, debug)
         .expect("Failed to load game file");
 
+    // Determine CPU type: explicit --cpu flag, or auto-detect from flash contents
+    let cpu_type = if let Some(ct) = cpu_override {
+        ct
+    } else {
+        let mut tmp = vec![0u8; 32768];
+        if arduboy_core::hex::parse_hex(&game.hex_str, &mut tmp).is_ok() {
+            let detected = detect_cpu_type(&tmp);
+            if debug {
+                eprintln!("CPU auto-detected: {:?}", detected);
+            }
+            detected
+        } else {
+            CpuType::Atmega32u4
+        }
+    };
+
     let mut arduboy = Arduboy::new_with_cpu(cpu_type);
     arduboy.debug = debug;
-    if debug && cpu_type == CpuType::Atmega328p {
+    if cpu_type == CpuType::Atmega328p {
         eprintln!("CPU: ATmega328P (Gamebuino Classic mode)");
     }
-    let size = arduboy.load_hex(&game.hex_str).expect("Failed to parse HEX");
-    if debug { eprintln!("Loaded {} bytes into flash", size); }
 
-    if let Some(ref fx) = game.fx_data {
-        arduboy.load_fx_data(fx);
-        if debug { eprintln!("FX data loaded: {} bytes", fx.len()); }
+    // Load game — ELF or HEX
+    let mut _elf_info: Option<arduboy_core::elf::ElfFile> = None;
+    if let Some(ref elf_data) = game.elf_data {
+        match arduboy.load_elf(elf_data) {
+            Ok(elf) => {
+                eprintln!("ELF loaded: {} symbols, {} line entries",
+                    elf.symbols.len(), elf.line_map.len());
+                _elf_info = Some(elf);
+            }
+            Err(e) => {
+                eprintln!("ELF parse error: {}", e);
+                std::process::exit(1);
+            }
+        }
+    } else {
+        let size = arduboy.load_hex(&game.hex_str).expect("Failed to parse HEX");
+        if debug { eprintln!("Loaded {} bytes into flash", size); }
     }
+
+    load_game_fx(&mut arduboy, &game, debug);
 
     // Parse breakpoints
     {
@@ -488,19 +601,54 @@ fn main() {
         }
     }
 
+    // Parse watchpoints
+    {
+        let mut i = 0;
+        while i < args.len() {
+            if args[i] == "--watch" {
+                if let Some(s) = args.get(i + 1) {
+                    let s = s.trim_start_matches("0x").trim_start_matches("0X");
+                    if let Ok(addr) = u16::from_str_radix(s, 16) {
+                        let idx = arduboy.debugger.add_watchpoint(
+                            addr, arduboy_core::debugger::WatchKind::ReadWrite
+                        );
+                        if debug { eprintln!("Watchpoint [{}]: 0x{:04X} RW", idx, addr); }
+                    }
+                }
+                i += 2;
+            } else { i += 1; }
+        }
+    }
+
+    // Auto-start profiler if --profile
+    if profile_enabled {
+        arduboy.profiler.start(arduboy.cpu.tick);
+        if debug { eprintln!("Profiler: started"); }
+    }
+
     // EEPROM: auto-load
     let eep_path = eeprom_path(&game.hex_path);
     if !no_save {
         load_eeprom(&mut arduboy, &eep_path, debug);
     }
 
-    if step_mode {
+    if let Some(port) = gdb_port {
+        run_gdb_mode(&mut arduboy, port, debug);
+    } else if step_mode {
         run_step_mode(&args, &mut arduboy);
     } else if headless {
         run_headless(&args, &mut arduboy, serial_enabled);
     } else {
         run_gui(&mut arduboy, mute, debug, initial_scale, serial_enabled,
-                &game.hex_path, &game.title, no_save);
+                &game.hex_path, &game.title, no_save, lcd_start, no_blur);
+    }
+
+    // Profiler report on exit
+    if profile_enabled || arduboy.profiler.enabled {
+        if arduboy.profiler.enabled {
+            arduboy.profiler.stop(arduboy.cpu.tick);
+        }
+        eprintln!("{}", arduboy.profiler_report());
     }
 
     // EEPROM: auto-save on exit
@@ -512,15 +660,16 @@ fn main() {
 // ─── GUI Mode ───────────────────────────────────────────────────────────────
 
 fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale: usize,
-           serial_enabled: bool, hex_path: &str, game_title: &str, no_save: bool)
+           serial_enabled: bool, hex_path: &str, game_title: &str, no_save: bool,
+           lcd_start: bool, no_blur: bool)
 {
     let mut cur_hex_path = hex_path.to_string();
     let mut scale = initial_scale;
     let mut scaled_w = SCREEN_WIDTH * scale;
     let mut scaled_h = SCREEN_HEIGHT * scale;
     let make_title = |game_t: &str| -> String {
-        if game_t.is_empty() { "Arduboy v0.5.0".to_string() }
-        else { format!("Arduboy v0.5.0 - {}", game_t) }
+        if game_t.is_empty() { "Arduboy v0.7.0".to_string() }
+        else { format!("Arduboy v0.7.0 - {}", game_t) }
     };
     let mut title_base = make_title(game_title);
 
@@ -580,12 +729,18 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
     let mut prev_p = false;
     let mut prev_o = false;
     let mut prev_b = false;
-    let mut blur_enabled = false;
+    let mut blur_enabled = !no_blur;
     let mut blur_buf = vec![0u32; scaled_w * scaled_h];
     let mut prev_l = false;
-    let mut lcd_effect = false;
+    let mut lcd_effect = lcd_start;
+    let mut prev_t = false;
+    let mut prev_a = false;
     // Temporal blend buffer for PCD8544 ghosting (128×64 float RGB)
     let mut prev_frame: Vec<(f32, f32, f32)> = vec![(0.0, 0.0, 0.0); SCREEN_WIDTH * SCREEN_HEIGHT];
+
+    // Rewind buffer: snapshot every 30 frames (~0.5s), up to 600 slots (~5 min)
+    let mut rewind = arduboy_core::snapshot::RewindBuffer::new(600, 30);
+    let mut prev_backspace = false;
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         if let Some(ref mut g) = gilrs { poll_gamepad(g, &mut gp, debug); }
@@ -660,6 +815,19 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
         }
         prev_l = lk;
 
+        // Profiler toggle (T)
+        let tk = window.is_key_down(Key::T);
+        if tk && !prev_t {
+            if arduboy.profiler.enabled {
+                arduboy.profiler.stop(arduboy.cpu.tick);
+                eprintln!("{}", arduboy.profiler_report());
+            } else {
+                arduboy.profiler.start(arduboy.cpu.tick);
+                eprintln!("Profiler: started (press T again to stop and report)");
+            }
+        }
+        prev_t = tk;
+
         // Mute (M)
         let m = window.is_key_down(Key::M);
         if m && !prev_m {
@@ -673,6 +841,14 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
             }
         }
         prev_m = m;
+
+        // Audio filter toggle (A)
+        let ak = window.is_key_down(Key::A);
+        if ak && !prev_a {
+            arduboy.audio_buf.toggle_filters();
+            eprintln!("Audio filter: {}", if arduboy.audio_buf.filters_enabled { "ON" } else { "OFF" });
+        }
+        prev_a = ak;
 
         // Screenshot (S) — PNG at current scale
         let s = window.is_key_down(Key::S);
@@ -723,7 +899,7 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
                     if let Err(e) = arduboy.load_hex(&game.hex_str) {
                         eprintln!("Reload error: {}", e);
                     } else {
-                        if let Some(ref fx) = game.fx_data { arduboy.load_fx_data(fx); }
+                        load_game_fx(arduboy, &game, debug);
                         if !no_save { load_eeprom(arduboy, &eep_path, debug); }
                         frame_count = 0;
                         eprintln!("Reloaded: {}", cur_hex_path);
@@ -807,11 +983,66 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
         arduboy.set_button(Button::A,     window.is_key_down(Key::Z)     || gp.a);
         arduboy.set_button(Button::B,     window.is_key_down(Key::X)     || gp.b);
 
-        arduboy.run_frame();
-        frame_count += 1;
-        fps_frames += 1;
+        // Rewind (Backspace) — restore previous snapshot instead of running
+        let bksp = window.is_key_down(Key::Backspace);
+        if bksp {
+            if let Some(snap) = rewind.pop() {
+                arduboy.restore_snapshot(&snap);
+                if !prev_backspace {
+                    eprintln!("Rewind: {} snapshots remaining", rewind.len());
+                }
+                prev_backspace = true;
+                // Skip normal frame execution when rewinding
+                // Still render below
+            } else {
+                if !prev_backspace {
+                    eprintln!("Rewind: no more snapshots");
+                }
+                prev_backspace = true;
+            }
+        } else {
+            prev_backspace = false;
 
-        if arduboy.breakpoint_hit {
+            arduboy.run_frame();
+            frame_count += 1;
+            fps_frames += 1;
+
+            // Diagnostic output for first few frames when debugging
+            if debug && (frame_count == 1 || frame_count == 60 || frame_count == 120) {
+                let fb = arduboy.framebuffer_rgba();
+                let fb_nonzero = fb.chunks(4).any(|px| px[0] > 0 || px[1] > 0 || px[2] > 0);
+                let display_cmds = arduboy.display.dbg_cmd_count;
+                let display_data = arduboy.display.dbg_data_count;
+                eprintln!("[Frame {}] display_type={:?}, SPI_writes={}, FX_transfers={}, display_cmds={}, display_data={}, fb_has_content={}, PC=0x{:04X}",
+                    frame_count, arduboy.display_type,
+                    arduboy.dbg_spdr_writes, arduboy.dbg_fx_transfers,
+                    display_cmds, display_data, fb_nonzero,
+                    arduboy.cpu.pc);
+                if frame_count == 1 {
+                    eprintln!("  DDRD=0x{:02X} PORTD=0x{:02X} FX_loaded={}",
+                        arduboy.mem.data[0x2A], arduboy.mem.data[0x2B],
+                        arduboy.fx_flash.loaded);
+                }
+            }
+            // Always print FX diagnostics at frame 1 (helps debug FX games)
+            if frame_count == 1 && arduboy.fx_flash.loaded {
+                let fb = arduboy.framebuffer_rgba();
+                let fb_nonzero = fb.chunks(4).any(|px| px[0] > 0 || px[1] > 0 || px[2] > 0);
+                eprintln!("[FX diag] frame=1 DDRD=0x{:02X} PORTD=0x{:02X} SPI={} FX={} display={:?} cmds={} data={} fb={}",
+                    arduboy.mem.data[0x2A], arduboy.mem.data[0x2B],
+                    arduboy.dbg_spdr_writes, arduboy.dbg_fx_transfers,
+                    arduboy.display_type,
+                    arduboy.display.dbg_cmd_count, arduboy.display.dbg_data_count,
+                    if fb_nonzero { "content" } else { "EMPTY" });
+            }
+
+            // Save rewind snapshot at interval
+            if rewind.tick_frame() {
+                rewind.push(arduboy.save_snapshot());
+            }
+        }
+
+        if !bksp && arduboy.breakpoint_hit {
             eprintln!("*** Breakpoint: {} ***\n{}", arduboy.disasm_at_pc(), arduboy.dump_regs());
             arduboy.breakpoint_hit = false;
         }
@@ -835,7 +1066,7 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
 
         if !muted {
             let (lh, rh) = arduboy.get_audio_tone();
-            if arduboy.audio_buf.has_audio() {
+            if arduboy.audio_buf.needs_render() {
                 arduboy.audio_buf.render_samples(
                     &mut pcm_buf,
                     AUDIO_SAMPLE_RATE,
@@ -949,9 +1180,6 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
                                 let on_right = sx == cur_scale - 1;
                                 let on_bottom = sy == cur_scale - 1;
                                 // Is this sub-pixel a corner of the pixel block?
-                                let is_corner = (sx == 0 || sx == cur_scale - 1)
-                                             && (sy == 0 || sy == cur_scale - 1);
-                                // Skip the very inner area
                                 let is_inner_corner = (sx == 0 && sy == 0)
                                     || (sx == 0 && sy == cur_scale - 1)
                                     || (sx == cur_scale - 1 && sy == 0)
@@ -1088,8 +1316,10 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
             let rx = if arduboy.led_rx { " RX" } else { "" };
             let lcd = if lcd_effect { " [LCD]" } else { "" };
             let blr = if blur_enabled { " [BLUR]" } else { "" };
-            window.set_title(&format!("{} - {:.0} FPS{}{}{}{}{}{}{}{}{} ({}x)",
-                title_base, fps, ti, ms, fs, rec, led, tx, rx, lcd, blr, cur_scale));
+            let prf = if arduboy.profiler.enabled { " [PROF]" } else { "" };
+            let flt = if arduboy.audio_buf.filters_enabled { " [FILT]" } else { "" };
+            window.set_title(&format!("{} - {:.0} FPS{}{}{}{}{}{}{}{}{}{}{} ({}x)",
+                title_base, fps, ti, ms, fs, rec, led, tx, rx, lcd, blr, prf, flt, cur_scale));
             fps_frames = 0;
             last_fps_time = Instant::now();
         }
@@ -1125,47 +1355,335 @@ fn run_step_mode(args: &[String], arduboy: &mut Arduboy) {
         .and_then(|s| s.parse().ok())
         .unwrap_or(100_000);
 
-    println!("Step mode: Enter=step, N<enter>=step N, r=run to break, d=dump, q=quit");
+    println!("Interactive Debugger v0.7.0");
+    println!("Commands:");
+    println!("  <Enter>/<N>  Step 1 or N instructions");
+    println!("  r/run        Run to breakpoint/watchpoint");
+    println!("  f/frame      Run one frame (216000 cycles)");
+    println!("  d/dump       Register dump");
+    println!("  ram <addr> [len]  Hex dump (default len=128)");
+    println!("  io           Show non-zero I/O registers");
+    println!("  io all       Show all I/O registers");
+    println!("  b <addr>     Add breakpoint (byte address)");
+    println!("  bl           List breakpoints");
+    println!("  bd <idx>     Delete breakpoint");
+    println!("  w <addr> [r|w|rw]  Add watchpoint (data addr)");
+    println!("  wl           List watchpoints");
+    println!("  wd <idx>     Delete watchpoint");
+    println!("  prof start   Start profiler");
+    println!("  prof stop    Stop and show report");
+    println!("  prof report  Show profiler report");
+    println!("  q/quit       Exit");
+    println!();
     println!("{}", arduboy.dump_regs());
     println!("Next: {}", arduboy.disasm_at_pc());
 
     let stdin = std::io::stdin();
     let mut steps = 0usize;
+    let mut ram_snapshot: Option<Vec<u8>> = None;
+
     loop {
         let mut line = String::new();
-        print!("step> ");
+        print!("dbg> ");
         let _ = std::io::stdout().flush();
         if stdin.read_line(&mut line).is_err() { break; }
-        let cmd = line.trim();
-        match cmd {
+        let parts: Vec<&str> = line.trim().split_whitespace().collect();
+        if parts.is_empty() {
+            // Empty line = step 1
+            let asm = arduboy.step_one();
+            steps += 1;
+            println!("  {}", asm);
+            check_watch_hit(arduboy);
+            println!("{}", arduboy.dump_regs());
+            println!("Next: {}", arduboy.disasm_at_pc());
+            continue;
+        }
+
+        match parts[0] {
             "q" | "quit" => break,
-            "d" | "dump" => { println!("{}", arduboy.dump_regs()); continue; }
+
+            "d" | "dump" => {
+                println!("{}", arduboy.dump_regs());
+            }
+
             "r" | "run" => {
-                for _ in 0..max_steps {
+                let limit = if parts.len() > 1 {
+                    parts[1].parse().unwrap_or(max_steps)
+                } else { max_steps };
+                for _ in 0..limit {
                     if !arduboy.breakpoints.is_empty() && arduboy.breakpoints.contains(&arduboy.cpu.pc) {
                         println!("*** Breakpoint: {} ***", arduboy.disasm_at_pc());
                         break;
                     }
                     arduboy.step_one();
                     steps += 1;
+                    if check_watch_hit(arduboy) { break; }
                 }
                 println!("{}", arduboy.dump_regs());
                 println!("Next: {}", arduboy.disasm_at_pc());
-                continue;
             }
-            _ => {}
+
+            "f" | "frame" => {
+                let n: usize = if parts.len() > 1 { parts[1].parse().unwrap_or(1) } else { 1 };
+                for _ in 0..n {
+                    arduboy.run_frame();
+                    if arduboy.breakpoint_hit {
+                        println!("*** Break: {} ***", arduboy.disasm_at_pc());
+                        arduboy.breakpoint_hit = false;
+                        check_watch_hit(arduboy);
+                        break;
+                    }
+                }
+                println!("{}", arduboy.dump_regs());
+                println!("Next: {}", arduboy.disasm_at_pc());
+            }
+
+            "ram" => {
+                let addr: u16 = if parts.len() > 1 {
+                    parse_cli_hex(parts[1]).unwrap_or(0x100) as u16
+                } else { 0x100 };
+                let len: u16 = if parts.len() > 2 {
+                    parse_cli_hex(parts[2]).unwrap_or(128) as u16
+                } else { 128 };
+                println!("{}", arduboy.dump_ram(addr, len));
+            }
+
+            "ramdiff" => {
+                let addr: u16 = if parts.len() > 1 {
+                    parse_cli_hex(parts[1]).unwrap_or(0x100) as u16
+                } else { 0x100 };
+                let len: u16 = if parts.len() > 2 {
+                    parse_cli_hex(parts[2]).unwrap_or(128) as u16
+                } else { 128 };
+                if let Some(ref old) = ram_snapshot {
+                    println!("{}", arduboy_core::debugger::dump_ram_diff(old, &arduboy.mem.data, addr, len));
+                } else {
+                    println!("No snapshot. Use 'snap' to take a RAM snapshot first.");
+                }
+            }
+
+            "snap" => {
+                ram_snapshot = Some(arduboy.mem.data.clone());
+                println!("RAM snapshot taken ({} bytes)", arduboy.mem.data.len());
+            }
+
+            "io" => {
+                if parts.len() > 1 && parts[1] == "all" {
+                    println!("{}", arduboy.dump_io_all());
+                } else {
+                    println!("{}", arduboy.dump_io());
+                }
+            }
+
+            "b" => {
+                if parts.len() > 1 {
+                    if let Some(addr) = parse_cli_hex(parts[1]) {
+                        let word_addr = (addr as u16) / 2;
+                        arduboy.breakpoints.push(word_addr);
+                        println!("Breakpoint added: 0x{:04X} (word 0x{:04X})", addr, word_addr);
+                    }
+                } else {
+                    println!("Usage: b <hex-byte-addr>");
+                }
+            }
+
+            "bl" => {
+                if arduboy.breakpoints.is_empty() {
+                    println!("No breakpoints.");
+                } else {
+                    for (i, &bp) in arduboy.breakpoints.iter().enumerate() {
+                        println!("  [{}] 0x{:04X} (byte 0x{:04X})", i, bp, bp * 2);
+                    }
+                }
+            }
+
+            "bd" => {
+                if parts.len() > 1 {
+                    if let Ok(idx) = parts[1].parse::<usize>() {
+                        if idx < arduboy.breakpoints.len() {
+                            let removed = arduboy.breakpoints.remove(idx);
+                            println!("Removed breakpoint [{}] at 0x{:04X}", idx, removed * 2);
+                        } else { println!("Invalid index."); }
+                    }
+                }
+            }
+
+            "w" => {
+                if parts.len() > 1 {
+                    if let Some(addr) = parse_cli_hex(parts[1]) {
+                        let kind = if parts.len() > 2 {
+                            match parts[2] {
+                                "r" => arduboy_core::debugger::WatchKind::Read,
+                                "w" => arduboy_core::debugger::WatchKind::Write,
+                                _ => arduboy_core::debugger::WatchKind::ReadWrite,
+                            }
+                        } else {
+                            arduboy_core::debugger::WatchKind::ReadWrite
+                        };
+                        let idx = arduboy.debugger.add_watchpoint(addr as u16, kind);
+                        println!("Watchpoint [{}]: 0x{:04X} {:?}", idx, addr, kind);
+                    }
+                } else {
+                    println!("Usage: w <hex-addr> [r|w|rw]");
+                }
+            }
+
+            "wl" => {
+                print!("{}", arduboy.debugger.list_watchpoints());
+            }
+
+            "wd" => {
+                if parts.len() > 1 {
+                    if let Ok(idx) = parts[1].parse::<usize>() {
+                        if arduboy.debugger.remove_watchpoint(idx) {
+                            println!("Watchpoint [{}] removed.", idx);
+                        } else { println!("Invalid index."); }
+                    }
+                }
+            }
+
+            "prof" => {
+                if parts.len() < 2 { println!("Usage: prof start|stop|report"); continue; }
+                match parts[1] {
+                    "start" => {
+                        arduboy.profiler.start(arduboy.cpu.tick);
+                        println!("Profiler started.");
+                    }
+                    "stop" => {
+                        arduboy.profiler.stop(arduboy.cpu.tick);
+                        println!("{}", arduboy.profiler_report());
+                    }
+                    "report" => {
+                        println!("{}", arduboy.profiler_report());
+                    }
+                    _ => println!("Usage: prof start|stop|report"),
+                }
+            }
+
+            // Numeric: step N instructions
+            _ => {
+                let n: usize = parts[0].parse().unwrap_or(1);
+                for i in 0..n {
+                    let asm = arduboy.step_one();
+                    steps += 1;
+                    if n <= 20 { println!("  {}", asm); }
+                    else if i == n - 1 { println!("  ... {} steps, last: {}", n, asm); }
+                    if check_watch_hit(arduboy) { break; }
+                }
+                println!("{}", arduboy.dump_regs());
+                println!("Next: {}", arduboy.disasm_at_pc());
+            }
         }
-        let n: usize = cmd.parse().unwrap_or(1);
-        for i in 0..n {
-            let asm = arduboy.step_one();
-            steps += 1;
-            if n <= 20 { println!("  {}", asm); }
-            else if i == n - 1 { println!("  ... {} steps, last: {}", n, asm); }
-        }
-        println!("{}", arduboy.dump_regs());
-        println!("Next: {}", arduboy.disasm_at_pc());
+    }
+    // Show profiler report if it was running
+    if arduboy.profiler.enabled {
+        arduboy.profiler.stop(arduboy.cpu.tick);
+        println!("{}", arduboy.profiler_report());
     }
     println!("Total: {} steps, {} cycles", steps, arduboy.cpu.tick);
+}
+
+/// Check and display watchpoint hit, return true if hit.
+fn check_watch_hit(arduboy: &mut Arduboy) -> bool {
+    if let Some(hit) = arduboy.debugger.take_hit() {
+        let name = arduboy_core::debugger::io_name(
+            hit.addr, arduboy.cpu_type == CpuType::Atmega328p
+        ).unwrap_or("");
+        println!("*** Watchpoint [{}]: {:?} at 0x{:04X}{} {:02X} → {:02X} ***",
+            hit.index, hit.access, hit.addr,
+            if name.is_empty() { String::new() } else { format!(" ({})", name) },
+            hit.old_val, hit.new_val);
+        true
+    } else { false }
+}
+
+/// Parse hex string with optional 0x prefix.
+fn parse_cli_hex(s: &str) -> Option<u32> {
+    let s = s.trim_start_matches("0x").trim_start_matches("0X");
+    u32::from_str_radix(s, 16).ok()
+}
+
+// ─── GDB Server Mode ────────────────────────────────────────────────────────
+
+fn run_gdb_mode(arduboy: &mut Arduboy, port: u16, debug: bool) {
+    use arduboy_core::gdb_server::{GdbServer, GdbAction};
+
+    let server = GdbServer::bind(port).expect("Failed to bind GDB server");
+    eprintln!("Waiting for GDB connection on port {}...", port);
+    let mut session = server.accept().expect("Failed to accept GDB connection");
+
+    // Initial halt — GDB expects the target to be stopped
+    loop {
+        let regs = arduboy.gdb_regs();
+        let action = session.process_packet(
+            &regs, arduboy.cpu.sreg, arduboy.cpu.sp, arduboy.cpu.pc,
+            &arduboy.mem.flash, &mut arduboy.mem.data,
+        ).expect("GDB packet error");
+
+        match action {
+            GdbAction::Continue => {
+                // Run until breakpoint or GDB interrupt
+                session.set_nonblocking(true).ok();
+                loop {
+                    // Check GDB breakpoints
+                    let pc_word = arduboy.cpu.pc;
+                    if session.breakpoints.iter().any(|&bp| pc_word == bp as u16) {
+                        break;
+                    }
+
+                    // Check emulator breakpoints
+                    if !arduboy.breakpoints.is_empty() && arduboy.breakpoints.contains(&pc_word) {
+                        break;
+                    }
+
+                    // Check watchpoint hits
+                    if arduboy.debugger.watch_hit.is_some() {
+                        break;
+                    }
+
+                    // Execute one instruction
+                    arduboy.step_one();
+
+                    // Check for Ctrl+C from GDB client
+                    if session.has_pending() {
+                        session.set_nonblocking(false).ok();
+                        // Read the interrupt byte
+                        let regs2 = arduboy.gdb_regs();
+                        let _ = session.process_packet(
+                            &regs2, arduboy.cpu.sreg, arduboy.cpu.sp, arduboy.cpu.pc,
+                            &arduboy.mem.flash, &mut arduboy.mem.data,
+                        );
+                        break;
+                    }
+                }
+                session.set_nonblocking(false).ok();
+
+                if let Some(wh) = arduboy.debugger.take_hit() {
+                    if debug {
+                        eprintln!("GDB: watchpoint hit at 0x{:04X} ({:02X} → {:02X})",
+                            wh.addr, wh.old_val, wh.new_val);
+                    }
+                }
+                session.send_stop_reply().expect("GDB send error");
+            }
+
+            GdbAction::Step => {
+                arduboy.step_one();
+                session.send_stop_reply().expect("GDB send error");
+            }
+
+            GdbAction::Disconnect => {
+                eprintln!("GDB client disconnected.");
+                break;
+            }
+
+            GdbAction::None => {
+                // Response already sent, loop back to read next packet
+            }
+        }
+
+        if session.done { break; }
+    }
 }
 
 // ─── Headless Mode ──────────────────────────────────────────────────────────
@@ -1210,6 +1728,16 @@ fn run_headless(args: &[String], arduboy: &mut Arduboy, serial_enabled: bool) {
         if arduboy.breakpoint_hit {
             println!("*** Break: {} (frame {}) ***\n{}", arduboy.disasm_at_pc(), frame+1, arduboy.dump_regs());
             arduboy.breakpoint_hit = false;
+            // Check for watchpoint hit
+            if let Some(wh) = arduboy.debugger.take_hit() {
+                let name = arduboy_core::debugger::io_name(
+                    wh.addr, arduboy.cpu_type == CpuType::Atmega328p
+                ).unwrap_or("");
+                println!("  Watchpoint [{}]: {:?} at 0x{:04X}{} {:02X} → {:02X}",
+                    wh.index, wh.access, wh.addr,
+                    if name.is_empty() { String::new() } else { format!(" ({})", name) },
+                    wh.old_val, wh.new_val);
+            }
         }
         if serial_enabled {
             let out = arduboy.take_serial_output();

@@ -22,6 +22,8 @@ Thumbs.db
 *.dylib
 *.pdb
 *.hex
+*.arduboy
+*.eep
 
 *.zip
 *.json

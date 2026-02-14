@@ -250,26 +250,59 @@ impl Timer16 {
         let ticks_since = tick.wrapping_sub(self.tick);
         let interval = (ticks_since / self.prescale as u64) as u32;
         if interval == 0 { return; }
-
-        let old_tcnt = self.tcnt;
-        let cnt = (self.tcnt as u32).wrapping_add(interval);
-        self.tcnt = (cnt & 0xFFFF) as u16;
         self.tick += (interval as u64) * (self.prescale as u64);
 
-        if self.ocie_a && old_tcnt < self.ocr_a && cnt as u16 >= self.ocr_a {
-            self.ocf_a += 1;
-            if self.ctc && !self.foc_a {
-                self.tcnt = 0;
+        let old_tcnt = self.tcnt;
+
+        if self.ctc && self.ocr_a > 0 {
+            // CTC mode: counter resets to 0 at OCR_A (unconditional — not gated on ocie_a)
+            let period = self.ocr_a as u32 + 1;
+            let total = old_tcnt as u32 + interval;
+
+            if old_tcnt <= self.ocr_a && total >= self.ocr_a as u32 {
+                // Crossed OCR_A at least once
+                let past_match = total - self.ocr_a as u32;
+                // +1 for first match, then count full wraps of the remainder
+                let matches = 1 + (past_match.saturating_sub(1)) / period;
+                let remainder = if past_match == 0 {
+                    0 // exactly hit OCR_A → reset to 0
+                } else {
+                    (past_match - 1) % period
+                };
+                self.ocf_a = self.ocf_a.saturating_add(matches);
+                self.tcnt = remainder as u16;
+            } else {
+                // Didn't reach OCR_A (or old_tcnt > OCR_A due to runtime OCR change:
+                // counter runs to 0xFFFF, wraps, then hits new OCR_A)
+                self.tcnt = (total & 0xFFFF) as u16;
+                if total > 0xFFFF {
+                    self.tov += 1;
+                }
+            }
+        } else {
+            // Non-CTC modes: free-running counter
+            let cnt = old_tcnt as u32 + interval;
+            self.tcnt = (cnt & 0xFFFF) as u16;
+
+            // Compare match flags (unconditional — not gated on interrupt enable).
+            // The OCIEn bits only control whether the interrupt fires, not the flag.
+            if self.ocr_a > 0 && old_tcnt < self.ocr_a && cnt as u16 >= self.ocr_a {
+                self.ocf_a += 1;
+            }
+
+            // Overflow
+            if cnt > self.top as u32 {
+                self.tov += 1;
             }
         }
-        if self.ocie_b && old_tcnt < self.ocr_b && cnt as u16 >= self.ocr_b {
+
+        // Compare match B/C flags (unconditional)
+        if self.ocr_b > 0 && old_tcnt < self.ocr_b && self.tcnt >= self.ocr_b {
             self.ocf_b += 1;
         }
-        if self.ocie_c && old_tcnt < self.ocr_c && cnt as u16 >= self.ocr_c {
+        if self.ocr_c > 0 && old_tcnt < self.ocr_c && self.tcnt >= self.ocr_c {
             self.ocf_c += 1;
         }
-
-        self.tov += (cnt / self.top as u32).min(1);
     }
 
     pub fn update(&mut self, tick: u64, data: &mut [u8]) {
@@ -279,16 +312,17 @@ impl Timer16 {
     }
 
     pub fn check_interrupt(&mut self) -> Option<u16> {
-        if self.ocf_a > 0 && self.ocie_a && !self.foc_a {
-            self.ocf_a = 0;
+        // OCIEn gates whether the interrupt fires (not whether the flag is set)
+        if self.ocf_a > 0 && self.ocie_a {
+            self.ocf_a = self.ocf_a.saturating_sub(1);
             return Some(self.int_compa);
         }
-        if self.ocf_b > 0 && self.ocie_b && !self.foc_b {
-            self.ocf_b = 0;
+        if self.ocf_b > 0 && self.ocie_b {
+            self.ocf_b = self.ocf_b.saturating_sub(1);
             return Some(self.int_compb);
         }
-        if self.ocf_c > 0 && self.ocie_c && !self.foc_c {
-            self.ocf_c = 0;
+        if self.ocf_c > 0 && self.ocie_c {
+            self.ocf_c = self.ocf_c.saturating_sub(1);
             return Some(self.int_compc);
         }
         if self.tov > 0 && self.toie {

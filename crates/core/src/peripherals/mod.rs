@@ -63,4 +63,7 @@ pub const INT_328P_TIMER2_COMPA: u16 = 0x000E;
 pub const INT_328P_TIMER2_COMPB: u16 = 0x0010;
 pub const INT_328P_TIMER2_OVF: u16 = 0x0012;
 pub const INT_328P_SPI: u16 = 0x0022;
+pub const INT_328P_USART_RX: u16 = 0x0024;
+pub const INT_328P_USART_UDRE: u16 = 0x0026;
+pub const INT_328P_USART_TX: u16 = 0x0028;
 pub const INT_328P_ADC: u16 = 0x002A;

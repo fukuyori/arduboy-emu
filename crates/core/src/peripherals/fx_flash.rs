@@ -1,5 +1,5 @@
 /// W25Q128 SPI Flash emulation for Arduboy FX
-/// 16MB flash connected via SPI with CS on PD2
+/// 16MB flash connected via SPI with CS on PD1 (Arduino D2)
 ///
 /// Supported commands:
 /// - 0x03: Read Data (addr24, then continuous read)
@@ -21,7 +21,7 @@ const JEDEC_TYPE: u8 = 0x40;    // SPI
 const JEDEC_CAP: u8 = 0x18;     // 128Mbit = 16MB
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum FxState {
+pub enum FxState {
     Idle,
     // Read commands
     ReadAddr { cmd: u8, addr_bytes: u8, addr: u32 },
@@ -42,7 +42,7 @@ enum FxState {
 
 pub struct FxFlash {
     pub data: Vec<u8>,
-    state: FxState,
+    pub state: FxState,
     pub loaded: bool,
     write_enabled: bool,
     powered_down: bool,

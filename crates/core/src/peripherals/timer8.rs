@@ -22,6 +22,8 @@ pub struct Timer8Addrs {
     pub int_compa: u16,
     /// Compare match B interrupt vector (word address)
     pub int_compb: u16,
+    /// True for Timer2 (async timer with different prescaler table)
+    pub is_timer2: bool,
 }
 
 pub struct Timer8 {
@@ -35,6 +37,8 @@ pub struct Timer8 {
     wgm01: bool,
     wgm02: bool,
     // Compare output mode
+    com_a: u8,
+    com_b: u8,
     ocr0a: u8,
     ocr0b: u8,
     tcnt_shadow: u8,
@@ -60,6 +64,7 @@ impl Timer8 {
             cs: 0,
             mode: 0,
             wgm00: false, wgm01: false, wgm02: false,
+            com_a: 0, com_b: 0,
             ocr0a: 0, ocr0b: 0,
             tcnt_shadow: 0,
             tov0: 0, ocf0a: 0, ocf0b: 0,
@@ -73,14 +78,30 @@ impl Timer8 {
     }
 
     fn update_prescale(&mut self) {
-        self.prescale = match self.cs {
-            0 => 0,
-            1 => 1,
-            2 => 8,
-            3 => 64,
-            4 => 256,
-            5 => 1024,
-            _ => 1,
+        self.prescale = if self.addrs.is_timer2 {
+            // Timer2 (ATmega328P async timer) — different prescaler table
+            match self.cs {
+                0 => 0,       // stopped
+                1 => 1,       // clk/1
+                2 => 8,       // clk/8
+                3 => 32,      // clk/32
+                4 => 64,      // clk/64
+                5 => 128,     // clk/128
+                6 => 256,     // clk/256
+                7 => 1024,    // clk/1024
+                _ => 0,
+            }
+        } else {
+            // Timer0 (and Timer2 on 32u4) — standard prescaler table
+            match self.cs {
+                0 => 0,
+                1 => 1,
+                2 => 8,
+                3 => 64,
+                4 => 256,
+                5 => 1024,
+                _ => 0,  // external clock (not emulated)
+            }
         };
         let wgm = ((self.wgm02 as u8) << 2) | ((self.wgm01 as u8) << 1) | (self.wgm00 as u8);
         self.mode = wgm;
@@ -98,6 +119,8 @@ impl Timer8 {
         if addr == self.addrs.tccr_a {
             self.wgm00 = value & 1 != 0;
             self.wgm01 = value & 2 != 0;
+            self.com_b = (value >> 4) & 3;
+            self.com_a = (value >> 6) & 3;
             self.update_prescale();
             data[addr as usize] = value;
             return true;
@@ -224,30 +247,68 @@ impl Timer8 {
     }
 
     /// Check for pending interrupts. Returns vector address if interrupt fires.
+    ///
+    /// Priority order matches ATmega328P datasheet: COMPA > COMPB > OVF.
     pub fn check_interrupt(&mut self) -> Option<u16> {
+        if self.ocf0a > 0 && self.ocie0a {
+            self.ocf0a = self.ocf0a.saturating_sub(1);
+            self.dbg_int_fire_count += 1;
+            return Some(self.addrs.int_compa);
+        }
+        if self.ocf0b > 0 && self.ocie0b {
+            self.ocf0b = self.ocf0b.saturating_sub(1);
+            self.dbg_int_fire_count += 1;
+            return Some(self.addrs.int_compb);
+        }
         if self.tov0 > 0 && self.toie0 {
             self.tov0 = self.tov0.saturating_sub(1);
             self.dbg_int_fire_count += 1;
             return Some(self.addrs.int_ovf);
         }
-        if self.ocf0a > 0 && self.ocie0a {
-            self.ocf0a = self.ocf0a.saturating_sub(1);
-            return Some(self.addrs.int_compa);
-        }
-        if self.ocf0b > 0 && self.ocie0b {
-            self.ocf0b = self.ocf0b.saturating_sub(1);
-            return Some(self.addrs.int_compb);
-        }
         None
     }
 
     pub fn dbg_info(&self) -> String {
-        format!("mode={} cs={} ps={} toie={} tov={} cnt={} ocra={}",
-            self.mode, self.cs, self.prescale, self.toie0, self.tov0, self.tcnt_shadow, self.ocr0a)
+        format!("mode={} cs={} ps={} ocra={} ocie_a={} ocf_a={} toie={} tov={} cnt={} int_fires={}",
+            self.mode, self.cs, self.prescale, self.ocr0a, self.ocie0a, self.ocf0a,
+            self.toie0, self.tov0, self.tcnt_shadow, self.dbg_int_fire_count)
     }
 
     pub fn dbg_reset_counters(&mut self) {
         self.dbg_ovf_count = 0;
         self.dbg_int_fire_count = 0;
+    }
+
+    /// Calculate output frequency for CTC mode with toggle on compare match.
+    ///
+    /// Returns 0.0 if timer is stopped or not in CTC-toggle configuration.
+    /// CTC mode (WGM=010) with COM_A=01 (toggle OC0A on match):
+    /// f_out = f_clk / (2 * prescaler * (1 + OCR0A))
+    pub fn get_tone_hz(&self, clock: u32) -> f32 {
+        if self.prescale == 0 || self.com_a != 1 {
+            return 0.0;
+        }
+        // CTC mode: WGM = 010
+        if self.mode != 2 {
+            return 0.0;
+        }
+        if self.ocr0a == 0 {
+            return 0.0;
+        }
+        clock as f32 / (2.0 * self.prescale as f32 * (self.ocr0a as f32 + 1.0))
+    }
+
+    /// Check if Timer is outputting PWM on OC_B pin (PWM DAC mode).
+    ///
+    /// Returns true when COM_B is set (non-zero) in a PWM mode, indicating
+    /// hardware PWM output on OC2B (PD3 for Timer2). Used for Gamebuino Classic
+    /// sound where Timer1 ISR updates OCR2B to produce audio via PWM DAC.
+    pub fn is_pwm_dac_active(&self) -> bool {
+        self.com_b != 0 && self.prescale > 0 && (self.mode == 1 || self.mode == 3 || self.mode == 5 || self.mode == 7)
+    }
+
+    /// Get current OCR_B value (PWM DAC level, 0–255).
+    pub fn ocr_b(&self) -> u8 {
+        self.ocr0b
     }
 }

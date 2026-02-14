@@ -5,6 +5,84 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2025-02-13
+
+### Added
+
+- **CPU auto-detection** — Automatically identifies ATmega328P (Gamebuino Classic) vs ATmega32u4 (Arduboy) binaries by analyzing the interrupt vector table size. No more `--cpu 328p` flag needed; just run `arduboy-emu game.hex`. Also works during game switching (N/P keys).
+- **ELF/DWARF debug support** (`elf.rs`, ~280 lines) — AVR ELF parser with:
+  - Flash loading from PT_LOAD segments
+  - Symbol table extraction (function names → byte addresses)
+  - DWARF `.debug_line` parser (versions 2–4) for source file:line ↔ PC mapping
+  - `describe_pc()` for combined function+source display
+- **`.elf` file loading** — `arduboy-emu game.elf` with automatic debug info extraction
+- **Rewind** (`snapshot.rs`, ~140 lines) — hold Backspace to rewind gameplay:
+  - Ring buffer of 600 snapshots (every 0.5s = ~5 min rewind)
+  - Saves CPU state, SRAM, EEPROM, display framebuffer
+  - `Arduboy::save_snapshot()` / `restore_snapshot()` API
+- **Audio post-processing pipeline** (`audio_buffer.rs`, ~465 lines) — Five-stage DSP chain:
+  - Sub-sample edge interpolation: time-weighted integration eliminates aliasing
+  - Butterworth LPF (8 kHz): simulates piezo speaker bandwidth rolloff
+  - DC-blocking HPF (20 Hz): removes sub-audible drift from LPF
+  - Click suppression envelope: 2 ms attack / 5 ms release fade
+  - Stereo crossfeed: 20% opposite-channel blend for natural headphone listening
+  - PWM DAC mode: sample-and-hold resampling for Timer2 OCR2B-based analog audio
+  - **A key** toggles filters on/off at runtime, `[FILT]` indicator in title bar
+- **`--lcd`** CLI option to start with LCD display effect enabled
+- **`--no-blur`** CLI option to start with blur filter disabled
+
+### Changed
+
+- `load_game_file()` now supports `.elf` file extension alongside `.hex` and `.arduboy`
+- Game scanner includes `.elf` files in directory browse (N/P keys)
+- Version bumped to 0.7.0 throughout
+
+### Fixed
+
+- **Gamebuino Classic audio silent** — Two sound generation methods are now supported for ATmega328P: (1) GPIO toggle via `SBI PIND,3` in Timer2 ISR, and (2) **PWM DAC** where Timer1 ISR writes audio samples to OCR2B while Timer2 runs in Fast PWM mode on PD3(OC2B). The PWM DAC path (used by games like 101 Stars) records 8-bit sample values with CPU-tick timestamps, performs sample-and-hold interpolation during resampling, and feeds through the full post-processing pipeline (LPF, DC-blocking HPF, envelope, crossfeed).
+- **Timer2 prescaler table wrong** — Timer8 used Timer0's prescaler mapping (CS3=/64) for Timer2, but ATmega328P Timer2 has a different table (CS3=/32, CS4=/64, CS5=/128, CS6=/256, CS7=/1024). Added `is_timer2` flag to `Timer8Addrs` to select the correct prescaler lookup.
+- **Gamebuino Classic black screen** — PCD8544 DC/CS pin mapping was wrong. Binary analysis of 3D-DEMO.HEX revealed the actual Gamebuino Classic pin assignment: DC=A2(PC2), CS=A1(PC1), RST=A0(PC0). The emulator had DC=PC0 (confusing DC with RST). The `digitalWrite` function writes port registers via `ST X` (indirect store through pin lookup tables in flash), going through `write_data()`. Fixed by setting correct default pin mapping (DC=PC2, CS=PC1) for ATmega328P, with runtime auto-detection fallback for non-standard pin configurations.
+- **Timer8 interrupt priority order** — Timer8 `check_interrupt()` fired TOV before COMPA/COMPB, but ATmega328P datasheet specifies COMPA > COMPB > OVF. Reordered to match hardware. Affects Timer2 COMPA-driven audio on Gamebuino where incorrect priority could delay sound ISR dispatch.
+- **FX games black screen** — SPI bus routing was exclusive (FX **or** display), but real hardware has a shared bus where both chips receive all bytes simultaneously. Display commands sent while FX CS was coincidentally LOW (e.g., during boot before explicit deselect) were swallowed by the FX state machine and never reached the SSD1306. Now both targets are routed independently, matching real hardware behavior.
+- **ISR-driven audio silent** — Games using `SBI PINC,6` in Timer3 ISR to toggle the speaker (1-bit audio from FX flash data) produced no sound. The PINx toggle handler (`write_data(0x26)`) performed `PORTC ^= value` and returned immediately, bypassing the PORTC speaker edge detection that records transitions into the audio buffer. Fixed all PINx toggle handlers (PINB/C/D/E/F) to re-invoke `write_data` on the corresponding PORTx address so all side effects (speaker detection, LED tracking, SPI routing) fire correctly.
+- **Timer16 CTC mode gated on interrupt enable** — Compare match detection and counter reset in CTC mode were incorrectly gated on `ocie_a` (interrupt enable). Real hardware always resets the counter at OCR_A in CTC mode regardless of interrupt settings. Also fixed: CTC wrap-around now handles multiple periods per update interval; removed incorrect FOC gating on interrupt dispatch.
+- **ZIP data descriptor support** — `.arduboy` files created by macOS (ditto/Finder) use data descriptors (bit 3 of general purpose flag) where `compressed_size=0` in the local file header. Rewrote ZIP parser to use Central Directory for reliable sizes. Custom inflate replaced with `miniz_oxide` crate for robust decompression.
+- **FX flash layout** — FX data was placed at offset 0 instead of right-aligned at end of 16MB flash. Games hardcode `FX_DATA_PAGE` (e.g., `0xF5B3`), reading from the wrong offset returned 0xFF. Implemented `load_fx_layout()` with correct right-aligned placement algorithm.
+- **EIJMP/EICALL overflow** — `(eind << 16) | z` caused arithmetic overflow on u16. Removed EIND shift (irrelevant for ATmega32u4's 16-bit PC with 32KB flash).
+- **Framebuffer type mismatch** — Snapshot restore used `[u8; 32768]` array where `Vec<u8>` was expected. Added `.to_vec()` conversion.
+- **Dead assignment warning** — Removed unused `pos` assignment in ELF DWARF file name table parser.
+
+## [0.6.0] - 2025-02-13
+
+### Added
+
+- **Execution profiler** (`profiler.rs`, 222 lines) — PC histogram, top-N hotspot analysis with disassembly, call graph tracking (CALL/RCALL/ICALL/RET), flat profile (hot regions), CPI metrics
+- **Advanced debugger** (`debugger.rs`, 348 lines) — RAM hex+ASCII viewer (`dump_ram`), RAM diff viewer (`dump_ram_diff`), I/O register viewer with named registers for both ATmega32u4 and ATmega328P, data watchpoints (read/write/read-write with value match)
+- **GDB Remote Serial Protocol server** (`gdb_server.rs`, 472 lines) — TCP-based RSP for avr-gdb connection: register read/write, memory read/write (flash + SRAM address mapping), software breakpoints, single step, continue, vCont, Ctrl+C interrupt
+- **`--gdb <port>`** CLI option to start GDB server mode
+- **`--profile`** CLI option to auto-enable profiler with report on exit
+- **`--watch <addr>`** CLI option for data watchpoints (repeatable)
+- **T key** in GUI mode to toggle profiler (start/stop with report to stderr)
+- **Interactive debugger commands** in step mode: `ram <addr>`, `io`/`io all`, `w`/`wl`/`wd` (watchpoints), `prof start/stop/report`, `snap`/`ramdiff`, `f` (run frame), `b`/`bl`/`bd` (breakpoints)
+- Title bar `[PROF]` indicator when profiler is active
+- Watchpoint hit detection integrated into `run_frame()` loop
+- Profiler hooks in `step()` for CALL/RCALL/ICALL/RET tracking
+- `Arduboy::dump_ram()`, `dump_io()`, `dump_io_all()`, `profiler_report()`, `gdb_regs()` convenience methods
+- **LCD effect** (L key toggle) — display-accurate rendering with 4 layers:
+  - Color palette: SSD1306 blue-white OLED / PCD8544 yellow-green LCD
+  - Pixel grid lines: subtle darkening at pixel cell boundaries
+  - Temporal blend: 20% ghosting for PCD8544 (LCD response delay), 5% for SSD1306
+  - Dot corner rounding: darkened corners for organic pixel shape (3× and above)
+- **Soft blur** (B key toggle) — 3×3 weighted box filter post-process for pixel smoothing
+- **Aspect-ratio-preserving window resize** — maintains 2:1 ratio with integer scaling on drag resize
+- Title bar `[LCD]` and `[BLUR]` indicators
+
+### Changed
+
+- Step mode (`--step`) upgraded from simple stepper to full interactive debugger
+- Watchpoint checks integrated into `read_data()` and `write_data()` paths (zero-cost when no watchpoints set)
+- `Arduboy` struct now contains `profiler::Profiler` and `debugger::Debugger` fields
+
 ## [0.5.0] - 2025-02-13
 
 ### Added

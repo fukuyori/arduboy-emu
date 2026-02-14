@@ -33,6 +33,7 @@ pub fn disassemble(inst: Instruction, pc: u16) -> String {
         Instruction::Mulsu { d, r }=> format!("MULSU R{}, R{}", d, r),
         Instruction::Fmul { d, r } => format!("FMUL R{}, R{}", d, r),
         Instruction::Fmuls { d, r }=> format!("FMULS R{}, R{}", d, r),
+        Instruction::Fmulsu { d, r }=> format!("FMULSU R{}, R{}", d, r),
         Instruction::Adiw { d, k } => format!("ADIW R{}:R{}, {}", d + 1, d, k),
         Instruction::Sbiw { d, k } => format!("SBIW R{}:R{}, {}", d + 1, d, k),
         // Compare
@@ -94,6 +95,8 @@ pub fn disassemble(inst: Instruction, pc: u16) -> String {
         Instruction::Call { k } => format!("CALL 0x{:06X}", k * 2),
         Instruction::Ijmp  => "IJMP".into(),
         Instruction::Icall => "ICALL".into(),
+        Instruction::Eijmp  => "EIJMP".into(),
+        Instruction::Eicall => "EICALL".into(),
         Instruction::Cpse { d, r } => format!("CPSE R{}, R{}", d, r),
         Instruction::Sbrc { r, b } => format!("SBRC R{}, {}", r, b),
         Instruction::Sbrs { r, b } => format!("SBRS R{}, {}", r, b),
@@ -148,6 +151,8 @@ pub fn disassemble(inst: Instruction, pc: u16) -> String {
         // Misc
         Instruction::Sleep => "SLEEP".into(),
         Instruction::Wdr   => "WDR".into(),
+        Instruction::Break => "BREAK".into(),
+        Instruction::Spm   => "SPM".into(),
         Instruction::Unknown(w) => format!(".dw 0x{:04X}", w),
     }
 }

@@ -1,24 +1,26 @@
 # arduboy-emu
 
-**v0.5.0** — A cycle-accurate Arduboy emulator written in Rust.
+**v0.7.0** — A cycle-accurate Arduboy emulator written in Rust.
 
-Emulates the ATmega32u4 (Arduboy) and ATmega328P (Gamebuino Classic) microcontrollers at 16 MHz with display, audio, gamepad, and Arduboy FX flash support.
+Emulates the ATmega32u4 (Arduboy) and ATmega328P (Gamebuino Classic) microcontrollers at 16 MHz with display, audio, gamepad, and Arduboy FX flash support. Includes an interactive debugger, execution profiler, and GDB server for avr-gdb integration.
 
 ## Features
 
-- **Dual CPU support** — ATmega32u4 (default) and ATmega328P (`--cpu 328p`)
+- **Dual CPU support** — ATmega32u4 (Arduboy) and ATmega328P (Gamebuino Classic), auto-detected from binary
 - **AVR CPU core** — 80+ instructions with accurate flag computation (ADD, SUB, SBC/SBCI carry chains, MUL, etc.)
 - **SSD1306 OLED display** — 128×64 monochrome with horizontal/vertical addressing, contrast control, and invert
 - **PCD8544 LCD** — 84×48 Nokia display for Gamebuino Classic compatibility (auto-detected, default on 328P)
-- **Stereo audio** — Two independent channels with sample-accurate waveform rendering:
-  - Left: Timer3 CTC / Timer4 CTC / GPIO bit-bang on PC6 (Speaker 1)
-  - Right: Timer1 CTC / GPIO bit-bang on PB5 (Speaker 2)
-  - Hybrid audio: sample-accurate PCM for GPIO bit-bang, square wave synthesis fallback for timers
+- **LCD effect** — Display-accurate color palettes, pixel grid, response ghosting, dot rounding (L key)
+- **Stereo audio** — Two independent channels with sample-accurate waveform rendering
 - **Gamepad support** — Cross-platform via gilrs (Windows/Linux/macOS), with hot-plug
 - **Arduboy FX** — W25Q128 16 MB SPI flash emulation (Read, Fast Read, JEDEC ID, erase, program)
 - **Peripherals** — Timer0/1/2/3/4, SPI, ADC, PLL, EEPROM, USB Serial output
-- **Debugger** — Disassembler, breakpoints, step-by-step execution, register dump
-- **Dynamic display** — Scale 1×–6× toggle, fullscreen, PNG screenshots
+- **Interactive debugger** — RAM hex viewer, I/O register viewer with names, breakpoints, watchpoints, profiler
+- **Execution profiler** — PC histogram, top-N hotspot analysis, call graph, CPI metrics (T key / `--profile`)
+- **GDB server** — Remote Serial Protocol over TCP for avr-gdb (`--gdb <port>`)
+- **ELF/DWARF debug** — Load `.elf` files with symbol table and source-level debugging
+- **Rewind** — Hold Backspace to rewind up to 5 minutes of gameplay
+- **Dynamic display** — Scale 1×–6× toggle, fullscreen, PNG screenshots, blur filter
 - **USB Serial** — Captures `Serial.print()` output via UEDATX register interception (32u4 only)
 - **Headless mode** — Automated testing with frame snapshots and diagnostics
 - **.arduboy file support** — Load ZIP archives with info.json, hex, and FX bin
@@ -43,11 +45,11 @@ cargo run --release -- game.hex
 ## Usage
 
 ```
-arduboy-emu <file.hex|file.arduboy> [options]
+arduboy-emu <file.hex|file.arduboy|file.elf> [options]
 
 Options:
   --fx <file.bin>    Load FX flash data
-  --cpu <type>       CPU type: 32u4 (default) or 328p (Gamebuino Classic)
+  --cpu <type>       CPU type: 32u4 or 328p (auto-detected if omitted)
   --mute             Disable audio
   --debug            Show per-frame diagnostics
   --headless         Run without GUI
@@ -55,10 +57,15 @@ Options:
   --press N          Press A button on frame N (headless)
   --snapshot F       Print display at frame F (repeatable)
   --break <addr>     Set breakpoint at hex byte-address (repeatable)
-  --step             Interactive step-by-step debugger
+  --watch <addr>     Set data watchpoint at hex address (repeatable)
+  --step             Interactive debugger (RAM viewer, profiler, watchpoints)
+  --gdb <port>       Start GDB remote debug server on TCP port
+  --profile          Enable execution profiler (report on exit)
   --scale N          Initial display scale 1-6 (default 6)
   --serial           Show USB serial output on stderr
   --no-save          Disable EEPROM auto-save
+  --lcd              Start with LCD display effect enabled
+  --no-blur          Start with blur filter disabled
 ```
 
 ### File Formats
@@ -121,8 +128,11 @@ Press **O** to list all `.hex` and `.arduboy` files in the game's directory, the
 | FPS toggle  | F          | —                           | — (60fps ↔ unlimited)         |
 | Reg dump    | D          | —                           | —                             |
 | Mute       | M          | —                           | —                             |
+| Audio filter| A          | —                           | — (LPF/envelope/crossfeed)    |
 | Blur       | B          | —                           | — (soft pixel smoothing)      |
 | LCD effect | L          | —                           | — (display-accurate colors)   |
+| Profiler   | T          | —                           | — (toggle execution profiler) |
+| Rewind     | Backspace  | —                           | — (hold to rewind ~5 min)     |
 | Quit       | Escape     | —                           | —                             |
 
 Keyboard and gamepad inputs are OR-combined, so both can be used simultaneously.
@@ -181,9 +191,13 @@ Timer-driven audio falls back to frequency-based square wave synthesis.
 |---------|----------|--------|-----------|---------|
 | Left  | 1 | Timer3 CTC | OC3A (PC6) toggle on compare match | Arduboy2 `tone()` |
 | Left  | 2 | Timer4 CTC | OC4A toggle on compare match | PWM audio games |
-| Left  | 3 | GPIO bit-bang | Direct PORTC bit 6 toggling | Arcodia |
+| Left  | 3 | Timer2 CTC | ISR toggles PD3 (328P only) | Gamebuino Classic |
+| Left  | 4 | GPIO bit-bang | Direct PORTC bit 6 / PORTD bit 3 toggling | Arcodia |
 | Right | 1 | Timer1 CTC | OC1A (PB5) toggle on compare match | Dual-tone games |
 | Right | 2 | GPIO bit-bang | Direct PORTB bit 5 toggling | Custom engines |
+
+A toggleable post-processing pipeline (A key) improves audio quality:
+sub-sample edge interpolation → Butterworth LPF (8 kHz speaker sim) → DC-blocking HPF (20 Hz) → click suppression envelope (2 ms attack / 5 ms release) → stereo crossfeed (20%).
 
 ## Tested Games
 

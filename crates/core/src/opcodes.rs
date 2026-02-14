@@ -34,6 +34,7 @@ pub enum Instruction {
     Mulsu { d: u8, r: u8 },
     Fmul { d: u8, r: u8 },
     Fmuls { d: u8, r: u8 },
+    Fmulsu { d: u8, r: u8 },
     Adiw { d: u8, k: u8 },
     Sbiw { d: u8, k: u8 },
     // Compare
@@ -89,6 +90,8 @@ pub enum Instruction {
     Call { k: u32 },
     Ijmp,
     Icall,
+    Eijmp,
+    Eicall,
     Cpse { d: u8, r: u8 },
     Sbrc { r: u8, b: u8 },
     Sbrs { r: u8, b: u8 },
@@ -127,6 +130,8 @@ pub enum Instruction {
     // Misc
     Sleep,
     Wdr,
+    Break,
+    Spm,
     Unknown(u16),
 }
 
@@ -162,8 +167,12 @@ pub fn decode(word: u16, next_word: u16) -> (Instruction, u8) {
         0x9518 => return (Instruction::Reti, 1),
         0x9409 => return (Instruction::Ijmp, 1),
         0x9509 => return (Instruction::Icall, 1),
+        0x9419 => return (Instruction::Eijmp, 1),
+        0x9519 => return (Instruction::Eicall, 1),
         0x9588 => return (Instruction::Sleep, 1),
         0x95A8 => return (Instruction::Wdr, 1),
+        0x9598 => return (Instruction::Break, 1),
+        0x95E8 | 0x95F8 => return (Instruction::Spm, 1),
         0x95C8 => return (Instruction::Lpm0, 1),
         0x95D8 => return (Instruction::Elpm0, 1),
         // BSET/BCLR for individual flags
@@ -223,6 +232,12 @@ pub fn decode(word: u16, next_word: u16) -> (Instruction, u8) {
                     let d = (((word >> 4) & 0x7) + 16) as u8;
                     let r = ((word & 0x7) + 16) as u8;
                     return (Instruction::Fmuls { d, r }, 1);
+                }
+                // FMULSU: 0000 0011 1ddd 1rrr
+                0x00 if word & 0xFF88 == 0x0388 => {
+                    let d = (((word >> 4) & 0x7) + 16) as u8;
+                    let r = ((word & 0x7) + 16) as u8;
+                    return (Instruction::Fmulsu { d, r }, 1);
                 }
                 _ => {}
             }

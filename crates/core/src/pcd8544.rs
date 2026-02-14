@@ -16,7 +16,7 @@ const PCD_PAGES: usize = 6; // 48 / 8
 pub struct Pcd8544 {
     pub framebuffer: [u8; FB_SIZE],
     /// Internal video RAM (84 * 6 = 504 bytes)
-    vram: [u8; PCD_WIDTH * PCD_PAGES],
+    pub vram: [u8; PCD_WIDTH * PCD_PAGES],
     /// Current X address (column, 0-83)
     x_addr: u8,
     /// Current Y address (page/bank, 0-5)
@@ -24,7 +24,7 @@ pub struct Pcd8544 {
     /// Extended instruction set active (H=1)
     extended_mode: bool,
     /// Display control mode
-    display_mode: u8, // 0=blank, 1=all on, 4=normal, 5=inverse
+    pub display_mode: u8, // 0=blank, 1=all on, 4=normal, 5=inverse
     /// Power down
     power_down: bool,
     /// Vertical addressing mode
