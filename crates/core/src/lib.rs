@@ -1,6 +1,6 @@
 //! # arduboy-core
 //!
-//! Cycle-accurate emulation core for the Arduboy handheld game console (v0.7.2).
+//! Cycle-accurate emulation core for the Arduboy handheld game console (v0.7.3).
 //!
 //! Emulates the ATmega32u4 microcontroller (Arduboy) and ATmega328P (Gamebuino
 //! Classic / Arduino Uno) with 16 MHz clock, 32 KB flash, 2–2.5 KB SRAM,

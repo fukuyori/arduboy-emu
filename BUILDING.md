@@ -27,7 +27,7 @@ cd installers\windows
 build-windows.bat
 ```
 
-**Output:** `dist\windows\arduboy-emu-0.7.2-setup-x64.exe`
+**Output:** `dist\windows\arduboy-emu-0.7.3-setup-x64.exe`
 
 The installer includes:
 - Start Menu shortcut
@@ -52,7 +52,7 @@ cd installers\windows
 build-msi.bat
 ```
 
-**Output:** `dist\windows\arduboy-emu-0.7.2-x64.msi`
+**Output:** `dist\windows\arduboy-emu-0.7.3-x64.msi`
 
 Standard Windows Installer package with:
 - Per-user install (no admin required)
@@ -84,13 +84,13 @@ Standard Windows Installer package with:
 ```
 
 **Output:**
-- `dist/linux/arduboy-emu_0.7.2_amd64.deb`
-- `dist/linux/arduboy-emu-0.7.2-1.x86_64.rpm`
+- `dist/linux/arduboy-emu_0.7.3_amd64.deb`
+- `dist/linux/arduboy-emu-0.7.3-1.x86_64.rpm`
 
 **Install:**
 ```bash
-sudo dpkg -i dist/linux/arduboy-emu_0.7.2_amd64.deb     # Debian/Ubuntu
-sudo rpm -i dist/linux/arduboy-emu-0.7.2-1.x86_64.rpm   # Fedora/RHEL
+sudo dpkg -i dist/linux/arduboy-emu_0.7.3_amd64.deb     # Debian/Ubuntu
+sudo rpm -i dist/linux/arduboy-emu-0.7.3-1.x86_64.rpm   # Fedora/RHEL
 ```
 
 Packages install `arduboy-emu` to `/usr/bin/` with a `.desktop` entry, MIME type for `.arduboy` files, and AppStream metadata.
@@ -108,8 +108,8 @@ Packages install `arduboy-emu` to `/usr/bin/` with a `.desktop` entry, MIME type
 ```
 
 **Output:**
-- `dist/macos/ArduboyEmulator-0.7.2.pkg` — Standard macOS installer
-- `dist/macos/ArduboyEmulator-0.7.2.dmg` — Drag-and-drop disk image
+- `dist/macos/ArduboyEmulator-0.7.3.pkg` — Standard macOS installer
+- `dist/macos/ArduboyEmulator-0.7.3.dmg` — Drag-and-drop disk image
 
 The `.app` bundle includes `Info.plist` with file type associations for `.hex`, `.arduboy`, and `.elf` files.
 
@@ -118,8 +118,8 @@ The `.app` bundle includes `Info.plist` with file type associations for `.hex`, 
 Push a tag to trigger automatic builds on all platforms:
 
 ```bash
-git tag v0.7.2
-git push origin v0.7.2
+git tag v0.7.3
+git push origin v0.7.3
 ```
 
 The workflow (`.github/workflows/release.yml`) builds all packages and creates a draft GitHub Release with all artifacts attached. See the workflow file for details.

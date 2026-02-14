@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   Arduboy Emulator - WiX v5/v6 MSI Installer
-  Build: wix build -o ..\..\dist\windows\arduboy-emu-0.7.2-x64.msi arduboy-emu.wxs
+  Build: wix build -o ..\..\dist\windows\arduboy-emu-0.7.3-x64.msi arduboy-emu.wxs
   Requires: WiX Toolset v5+ (dotnet tool install -g wix)
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
 
   <Package Name="Arduboy Emulator"
-           Version="0.7.2"
+           Version="0.7.3"
            Manufacturer="arduboy-emu"
            UpgradeCode="B8A3F2E1-4D5C-6E7F-8A9B-0C1D2E3F4A5B"
            Scope="perUser"

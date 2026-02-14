@@ -1,6 +1,6 @@
 @echo off
 rem ============================================================
-rem  Arduboy Emulator - MSI Installer Builder v0.7.2
+rem  Arduboy Emulator - MSI Installer Builder v0.7.3
 rem  Uses WiX Toolset v5/v6 (dotnet tool)
 rem
 rem  Prerequisites:
@@ -9,10 +9,10 @@ rem    - .NET SDK 6+ (https://dotnet.microsoft.com/download)
 rem    - WiX: dotnet tool install -g wix
 rem
 rem  Usage:  build-msi.bat
-rem  Output: dist\windows\arduboy-emu-0.7.2-x64.msi
+rem  Output: dist\windows\arduboy-emu-0.7.3-x64.msi
 rem ============================================================
 
-set VERSION=0.7.2
+set VERSION=0.7.3
 set PROJECT_ROOT=%~dp0..\..
 
 echo ===================================

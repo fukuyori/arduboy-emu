@@ -1,6 +1,6 @@
 # arduboy-emu
 
-**v0.7.2** — Rust で書かれたサイクル精度の Arduboy エミュレータです。
+**v0.7.3** — Rust で書かれたサイクル精度の Arduboy エミュレータです。
 
 ATmega32u4（Arduboy）と ATmega328P（Gamebuino Classic）マイコン（16 MHz）をエミュレートします。対話型デバッガ、実行プロファイラ、avr-gdb 用 GDB サーバを搭載。
 

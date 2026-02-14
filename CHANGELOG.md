@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.3] - 2025-02-14
+
+### Fixed
+
+- **Linux segfault on launch** — minifb `AspectRatioStretch` caused out-of-bounds access in X11 `image_resize_linear_stride`. Changed to `UpperLeft` since we handle scaling ourselves.
+- **Gamepad buttons ignored on Linux** — Generic controllers without gilrs mapping DB entries reported all buttons as `Unknown`. Added raw evdev code fallback: even codes → A, odd codes → B.
+- **RPM build failure** — Disabled debuginfo subpackage (`%define debug_package %{nil}`) for pre-stripped binary. Removed duplicate doc/license install in `%install` section.
+
+### Changed
+
+- Version bumped to 0.7.3
+- Gamepad debug logging now shows raw button/axis events with `--debug` flag
+
 ## [0.7.2] - 2025-02-14
 
 ### Added

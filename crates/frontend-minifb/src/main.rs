@@ -1,4 +1,4 @@
-//! Arduboy emulator frontend v0.7.2.
+//! Arduboy emulator frontend v0.7.3.
 //!
 // Hide the console window on Windows in release builds.
 // Debug builds still show it for eprintln!() diagnostics.
@@ -15,7 +15,7 @@
 //! - **GDB mode** (`--gdb <port>`): GDB Remote Serial Protocol server for
 //!   connection from avr-gdb or compatible clients.
 //!
-//! ## v0.7.2 features
+//! ## v0.7.3 features
 //! - Interactive debugger: `ram`, `io`, `w` (watchpoint), `prof`, `snap`/`ramdiff`
 //! - Execution profiler: PC histogram, hotspot analysis, call graph tracking
 //! - GDB Remote Serial Protocol server (`--gdb <port>`)
@@ -168,10 +168,20 @@ fn init_gamepad(debug: bool) -> Option<Gilrs> {
 }
 
 fn poll_gamepad(gilrs: &mut Gilrs, state: &mut GamepadState, debug: bool) {
-    while let Some(GilrsEvent { event, .. }) = gilrs.next_event() {
+    while let Some(GilrsEvent { event, id, .. }) = gilrs.next_event() {
+        if debug {
+            match &event {
+                EventType::ButtonPressed(b, code)  => eprintln!("  GP[{}] ButtonPressed: {:?} code={:?}", id, b, code),
+                EventType::ButtonReleased(b, code) => eprintln!("  GP[{}] ButtonReleased: {:?} code={:?}", id, b, code),
+                EventType::AxisChanged(a, v, code) => eprintln!("  GP[{}] AxisChanged: {:?} val={:.3} code={:?}", id, a, v, code),
+                EventType::Connected    => eprintln!("  GP[{}] Connected", id),
+                EventType::Disconnected => eprintln!("  GP[{}] Disconnected", id),
+                _ => {}
+            }
+        }
         match event {
-            EventType::ButtonPressed(b, _)  => apply_button(state, b, true),
-            EventType::ButtonReleased(b, _) => apply_button(state, b, false),
+            EventType::ButtonPressed(b, code)  => apply_button_ext(state, b, code, true),
+            EventType::ButtonReleased(b, code) => apply_button_ext(state, b, code, false),
             EventType::AxisChanged(a, v, _) => apply_axis(state, a, v),
             EventType::Connected => {
                 if debug {
@@ -186,7 +196,10 @@ fn poll_gamepad(gilrs: &mut Gilrs, state: &mut GamepadState, debug: bool) {
     }
 }
 
-fn apply_button(state: &mut GamepadState, btn: GilrsButton, pressed: bool) {
+/// Map known gilrs buttons to Arduboy controls.
+/// For Unknown buttons (generic controllers without gilrs mapping DB entry),
+/// use the raw evdev code: even codes → A, odd codes → B.
+fn apply_button_ext(state: &mut GamepadState, btn: GilrsButton, code: gilrs::ev::Code, pressed: bool) {
     match btn {
         GilrsButton::DPadUp    => state.up    = pressed,
         GilrsButton::DPadDown  => state.down  = pressed,
@@ -197,6 +210,12 @@ fn apply_button(state: &mut GamepadState, btn: GilrsButton, pressed: bool) {
         GilrsButton::LeftTrigger  | GilrsButton::RightTrigger |
         GilrsButton::LeftTrigger2 | GilrsButton::RightTrigger2 |
         GilrsButton::Select => state.a = pressed,
+        GilrsButton::Unknown => {
+            // Generic controller fallback: split buttons by raw code parity
+            // evdev codes 288,290,292... (even) → A;  289,291,293... (odd) → B
+            let raw = code.into_u32() & 0xFFFF;
+            if raw % 2 == 0 { state.a = pressed; } else { state.b = pressed; }
+        }
         _ => {}
     }
 }
@@ -467,9 +486,23 @@ fn switch_game(
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 fn main() {
+    // Force X11 backend on Linux — minifb can segfault on Wayland (server-side
+    // decoration failures). Only override if WAYLAND_DISPLAY is set and the user
+    // hasn't explicitly chosen a backend.
+    #[cfg(target_os = "linux")]
+    {
+        if env::var("WAYLAND_DISPLAY").is_ok()
+            && env::var("MINIFB_BACKEND").is_err()
+        {
+            // Safety: called at start of main() before any threads are spawned.
+            unsafe { env::remove_var("WAYLAND_DISPLAY"); }
+            eprintln!("Note: forcing X11 backend (minifb Wayland crash workaround)");
+        }
+    }
+
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Arduboy Emulator v0.7.2 - Rust");
+        eprintln!("Arduboy Emulator v0.7.3 - Rust");
         eprintln!("Usage: {} <file.hex|.arduboy|.elf> [options]", args[0]);
         eprintln!();
         eprintln!("Supported formats:");
@@ -672,8 +705,8 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
     let mut scaled_w = SCREEN_WIDTH * scale;
     let mut scaled_h = SCREEN_HEIGHT * scale;
     let make_title = |game_t: &str| -> String {
-        if game_t.is_empty() { "Arduboy v0.7.2".to_string() }
-        else { format!("Arduboy v0.7.2 - {}", game_t) }
+        if game_t.is_empty() { "Arduboy v0.7.3".to_string() }
+        else { format!("Arduboy v0.7.3 - {}", game_t) }
     };
     let mut title_base = make_title(game_title);
 
@@ -681,7 +714,7 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
         &title_base, scaled_w, scaled_h,
         WindowOptions {
             scale: Scale::X1,
-            scale_mode: ScaleMode::AspectRatioStretch,
+            scale_mode: ScaleMode::UpperLeft,
             resize: true,
             ..Default::default()
         },
@@ -767,7 +800,7 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
                 let (ww, wh) = if portrait { (scaled_h, scaled_w) } else { (scaled_w, scaled_h) };
                 window = Window::new(
                     &title_base, ww, wh,
-                    WindowOptions { scale: Scale::X1, scale_mode: ScaleMode::AspectRatioStretch, resize: true, ..Default::default() },
+                    WindowOptions { scale: Scale::X1, scale_mode: ScaleMode::UpperLeft, resize: true, ..Default::default() },
                 ).expect("window");
                 if fps_unlimited { window.set_target_fps(0); } else { window.set_target_fps(60); }
             }
@@ -787,7 +820,7 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
             }
             scaled_buf.resize(scaled_w * scaled_h, 0);
             let (ww, wh) = if portrait { (scaled_h, scaled_w) } else { (scaled_w, scaled_h) };
-            let mut opts = WindowOptions { scale: Scale::X1, scale_mode: ScaleMode::AspectRatioStretch, resize: true, ..Default::default() };
+            let mut opts = WindowOptions { scale: Scale::X1, scale_mode: ScaleMode::UpperLeft, resize: true, ..Default::default() };
             if fullscreen { opts.borderless = true; }
             window = Window::new(&title_base, ww, wh, opts).expect("window");
             if fps_unlimited { window.set_target_fps(0); } else { window.set_target_fps(60); }
@@ -865,7 +898,7 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
             portrait = !portrait;
             eprintln!("Portrait: {}", if portrait { "ON" } else { "OFF" });
             let (ww, wh) = if portrait { (scaled_h, scaled_w) } else { (scaled_w, scaled_h) };
-            let opts = WindowOptions { scale: Scale::X1, scale_mode: ScaleMode::AspectRatioStretch, resize: true, ..Default::default() };
+            let opts = WindowOptions { scale: Scale::X1, scale_mode: ScaleMode::UpperLeft, resize: true, ..Default::default() };
             window = Window::new(&title_base, ww, wh, opts).expect("window");
             if fps_unlimited { window.set_target_fps(0); } else { window.set_target_fps(60); }
         }
@@ -1399,7 +1432,7 @@ fn run_step_mode(args: &[String], arduboy: &mut Arduboy) {
         .and_then(|s| s.parse().ok())
         .unwrap_or(100_000);
 
-    println!("Interactive Debugger v0.7.2");
+    println!("Interactive Debugger v0.7.3");
     println!("Commands:");
     println!("  <Enter>/<N>  Step 1 or N instructions");
     println!("  r/run        Run to breakpoint/watchpoint");

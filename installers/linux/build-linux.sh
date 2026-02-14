@@ -9,13 +9,13 @@
 #    - rpmbuild (for .rpm — install: sudo dnf install rpm-build)
 #
 #  Usage:  ./build-linux.sh [--deb] [--rpm] [--all]
-#  Output: dist/linux/arduboy-emu_0.7.2_amd64.deb
-#          dist/linux/arduboy-emu-0.7.2-1.x86_64.rpm
+#  Output: dist/linux/arduboy-emu_0.7.3_amd64.deb
+#          dist/linux/arduboy-emu-0.7.3-1.x86_64.rpm
 # ============================================================
 
 set -euo pipefail
 
-VERSION="0.7.2"
+VERSION="0.7.3"
 ARCH="amd64"
 RPM_ARCH="x86_64"
 APP_NAME="arduboy-emu"
@@ -243,6 +243,9 @@ DESKTOP
 
         # RPM spec file
         cat > "$RPM_TOPDIR/SPECS/$APP_NAME.spec" <<SPEC
+# Disable debuginfo subpackage (binary is pre-stripped)
+%define debug_package %{nil}
+
 Name:           ${APP_NAME}
 Version:        ${VERSION}
 Release:        1%{?dist}
@@ -271,14 +274,9 @@ execution profiler, rewind, LCD effect, and portrait rotation.
 %install
 mkdir -p %{buildroot}%{_bindir}
 mkdir -p %{buildroot}%{_datadir}/applications
-mkdir -p %{buildroot}%{_docdir}/%{name}
 
 install -m 755 %{name} %{buildroot}%{_bindir}/%{name}
 install -m 644 %{name}.desktop %{buildroot}%{_datadir}/applications/%{name}.desktop
-install -m 644 README.md %{buildroot}%{_docdir}/%{name}/
-install -m 644 CHANGELOG.md %{buildroot}%{_docdir}/%{name}/
-install -m 644 LICENSE-MIT %{buildroot}%{_docdir}/%{name}/
-install -m 644 LICENSE-APACHE %{buildroot}%{_docdir}/%{name}/
 
 %files
 %license LICENSE-MIT LICENSE-APACHE
@@ -287,7 +285,7 @@ install -m 644 LICENSE-APACHE %{buildroot}%{_docdir}/%{name}/
 %{_datadir}/applications/%{name}.desktop
 
 %changelog
-* Fri Feb 14 2025 arduboy-emu contributors - 0.7.2-1
+* Fri Feb 14 2025 arduboy-emu contributors - 0.7.3-1
 - PWM DAC audio for Gamebuino Classic
 - Portrait rotation (V key)
 - Timer2 prescaler table fix
