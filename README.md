@@ -1,6 +1,6 @@
 # arduboy-emu
 
-**v0.7.1** — A cycle-accurate Arduboy emulator written in Rust.
+**v0.7.2** — A cycle-accurate Arduboy emulator written in Rust.
 
 Emulates the ATmega32u4 (Arduboy) and ATmega328P (Gamebuino Classic) microcontrollers at 16 MHz with display, audio, gamepad, and Arduboy FX flash support. Includes an interactive debugger, execution profiler, and GDB server for avr-gdb integration.
 

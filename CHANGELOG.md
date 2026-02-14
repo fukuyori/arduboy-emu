@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] - 2025-02-14
+
+### Added
+
+- **MSI installer** — WiX v5/v6 based `.msi` package for Windows with per-user install, major upgrade support, file associations, and Start Menu/Desktop shortcuts
+- **Console window hidden** — Release builds use `windows_subsystem = "windows"` to suppress console window on double-click launch
+
+### Changed
+
+- Version bumped to 0.7.2
+- Removed ROM directory bundling from Inno Setup installer to prevent accidental inclusion of copyrighted game files
+
 ## [0.7.1] - 2025-02-14
 
 ### Added

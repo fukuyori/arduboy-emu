@@ -3,7 +3,7 @@
 ; Requires: Inno Setup 6.x (https://jrsoftware.org/isinfo.php)
 
 #define MyAppName "Arduboy Emulator"
-#define MyAppVersion "0.7.1"
+#define MyAppVersion "0.7.2"
 #define MyAppPublisher "arduboy-emu"
 #define MyAppURL "https://github.com/example/arduboy-emu"
 #define MyAppExeName "arduboy-frontend.exe"
@@ -50,8 +50,6 @@ Source: "..\..\LICENSE-APACHE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
 Source: "..\..\CHANGELOG.md"; DestDir: "{app}"; Flags: ignoreversion
 
-; ROM directory (empty, for user's game files)
-Source: "..\..\roms\*"; DestDir: "{app}\roms"; Flags: ignoreversion skipifsourcedoesntexist createallsubdirs recursesubdirs
 
 ; VC++ runtime (if statically linked, not needed; include if dynamically linked)
 ; Source: "vcruntime140.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist

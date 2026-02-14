@@ -9,13 +9,13 @@
 #    - rpmbuild (for .rpm — install: sudo dnf install rpm-build)
 #
 #  Usage:  ./build-linux.sh [--deb] [--rpm] [--all]
-#  Output: dist/linux/arduboy-emu_0.7.1_amd64.deb
-#          dist/linux/arduboy-emu-0.7.1-1.x86_64.rpm
+#  Output: dist/linux/arduboy-emu_0.7.2_amd64.deb
+#          dist/linux/arduboy-emu-0.7.2-1.x86_64.rpm
 # ============================================================
 
 set -euo pipefail
 
-VERSION="0.7.1"
+VERSION="0.7.2"
 ARCH="amd64"
 RPM_ARCH="x86_64"
 APP_NAME="arduboy-emu"
@@ -287,7 +287,7 @@ install -m 644 LICENSE-APACHE %{buildroot}%{_docdir}/%{name}/
 %{_datadir}/applications/%{name}.desktop
 
 %changelog
-* Fri Feb 14 2025 arduboy-emu contributors - 0.7.1-1
+* Fri Feb 14 2025 arduboy-emu contributors - 0.7.2-1
 - PWM DAC audio for Gamebuino Classic
 - Portrait rotation (V key)
 - Timer2 prescaler table fix

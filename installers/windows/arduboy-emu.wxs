@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Arduboy Emulator - WiX v5/v6 MSI Installer
+  Build: wix build -o ..\..\dist\windows\arduboy-emu-0.7.2-x64.msi arduboy-emu.wxs
+  Requires: WiX Toolset v5+ (dotnet tool install -g wix)
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <Package Name="Arduboy Emulator"
+           Version="0.7.2"
+           Manufacturer="arduboy-emu"
+           UpgradeCode="B8A3F2E1-4D5C-6E7F-8A9B-0C1D2E3F4A5B"
+           Scope="perUser"
+           InstallerVersion="500">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Arduboy Emulator is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Feature Id="MainApp" Title="Arduboy Emulator" Level="1">
+      <ComponentGroupRef Id="AppComponents" />
+      <ComponentGroupRef Id="ShortcutComponents" />
+      <ComponentGroupRef Id="FileAssocComponents" />
+    </Feature>
+
+  </Package>
+
+  <!-- Install directory layout -->
+  <Fragment>
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="INSTALLFOLDER" Name="Arduboy Emulator" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="AppMenuFolder" Name="Arduboy Emulator" />
+    </StandardDirectory>
+    <StandardDirectory Id="DesktopFolder" />
+  </Fragment>
+
+  <!-- Main application files -->
+  <Fragment>
+    <ComponentGroup Id="AppComponents" Directory="INSTALLFOLDER">
+      <Component Id="MainExecutable" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567890">
+        <File Id="ArduboyFrontendExe"
+              Source="..\..\target\release\arduboy-frontend.exe"
+              KeyPath="yes" />
+      </Component>
+      <Component Id="LicenseMIT" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567891">
+        <File Id="LicenseMITFile"
+              Source="..\..\LICENSE-MIT"
+              KeyPath="yes" />
+      </Component>
+      <Component Id="LicenseApache" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567892">
+        <File Id="LicenseApacheFile"
+              Source="..\..\LICENSE-APACHE"
+              KeyPath="yes" />
+      </Component>
+      <Component Id="ReadmeFile" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567893">
+        <File Id="ReadmeMdFile"
+              Source="..\..\README.md"
+              KeyPath="yes" />
+      </Component>
+      <Component Id="ChangelogFile" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567894">
+        <File Id="ChangelogMdFile"
+              Source="..\..\CHANGELOG.md"
+              KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+
+  <!-- Shortcuts -->
+  <Fragment>
+    <ComponentGroup Id="ShortcutComponents">
+      <Component Id="StartMenuShortcut" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567895" Directory="AppMenuFolder">
+        <Shortcut Id="AppStartMenuShortcut"
+                  Name="Arduboy Emulator"
+                  Target="[INSTALLFOLDER]arduboy-frontend.exe"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Description="Cycle-accurate Arduboy/Gamebuino emulator" />
+        <Shortcut Id="UninstallShortcut"
+                  Name="Uninstall Arduboy Emulator"
+                  Target="[SystemFolder]msiexec.exe"
+                  Arguments="/x [ProductCode]" />
+        <RemoveFolder Id="RemoveAppMenuFolder" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\ArduboyEmu" Name="StartMenu" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+      <Component Id="DesktopShortcut" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567896" Directory="DesktopFolder">
+        <Shortcut Id="AppDesktopShortcut"
+                  Name="Arduboy Emulator"
+                  Target="[INSTALLFOLDER]arduboy-frontend.exe"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Description="Cycle-accurate Arduboy/Gamebuino emulator" />
+        <RegistryValue Root="HKCU" Key="Software\ArduboyEmu" Name="Desktop" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+
+  <!-- File associations -->
+  <Fragment>
+    <ComponentGroup Id="FileAssocComponents" Directory="INSTALLFOLDER">
+      <Component Id="AssocArduboy" Guid="A1B2C3D4-E5F6-7890-ABCD-EF12345678A0">
+        <RegistryValue Root="HKCU" Key="Software\Classes\.arduboy" Type="string" Value="ArduboyEmu.arduboy" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\ArduboyEmu.arduboy" Type="string" Value="Arduboy Game Archive" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\ArduboyEmu.arduboy\DefaultIcon" Type="string" Value="[INSTALLFOLDER]arduboy-frontend.exe,0" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\ArduboyEmu.arduboy\shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]arduboy-frontend.exe&quot; &quot;%1&quot;" KeyPath="yes" />
+      </Component>
+      <Component Id="AssocHex" Guid="A1B2C3D4-E5F6-7890-ABCD-EF12345678A1">
+        <RegistryValue Root="HKCU" Key="Software\Classes\.hex\OpenWithProgids" Name="ArduboyEmu.hex" Type="string" Value="" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\ArduboyEmu.hex" Type="string" Value="Arduboy HEX ROM" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\ArduboyEmu.hex\shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]arduboy-frontend.exe&quot; &quot;%1&quot;" KeyPath="yes" />
+      </Component>
+      <Component Id="AssocElf" Guid="A1B2C3D4-E5F6-7890-ABCD-EF12345678A2">
+        <RegistryValue Root="HKCU" Key="Software\Classes\.elf\OpenWithProgids" Name="ArduboyEmu.elf" Type="string" Value="" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\ArduboyEmu.elf" Type="string" Value="Arduboy ELF Binary" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\ArduboyEmu.elf\shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]arduboy-frontend.exe&quot; &quot;%1&quot;" KeyPath="yes" />
+      </Component>
+      <Component Id="AppRegistration" Guid="A1B2C3D4-E5F6-7890-ABCD-EF12345678A3">
+        <RegistryValue Root="HKCU" Key="Software\Classes\Applications\arduboy-frontend.exe\SupportedTypes" Name=".hex" Type="string" Value="" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\Applications\arduboy-frontend.exe\SupportedTypes" Name=".arduboy" Type="string" Value="" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\Applications\arduboy-frontend.exe\SupportedTypes" Name=".elf" Type="string" Value="" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+
+</Wix>

@@ -1,4 +1,8 @@
-//! Arduboy emulator frontend v0.7.1.
+//! Arduboy emulator frontend v0.7.2.
+//!
+// Hide the console window on Windows in release builds.
+// Debug builds still show it for eprintln!() diagnostics.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 //!
 //! Provides four execution modes:
 //!
@@ -11,7 +15,7 @@
 //! - **GDB mode** (`--gdb <port>`): GDB Remote Serial Protocol server for
 //!   connection from avr-gdb or compatible clients.
 //!
-//! ## v0.7.1 features
+//! ## v0.7.2 features
 //! - Interactive debugger: `ram`, `io`, `w` (watchpoint), `prof`, `snap`/`ramdiff`
 //! - Execution profiler: PC histogram, hotspot analysis, call graph tracking
 //! - GDB Remote Serial Protocol server (`--gdb <port>`)
@@ -465,7 +469,7 @@ fn switch_game(
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Arduboy Emulator v0.7.1 - Rust");
+        eprintln!("Arduboy Emulator v0.7.2 - Rust");
         eprintln!("Usage: {} <file.hex|.arduboy|.elf> [options]", args[0]);
         eprintln!();
         eprintln!("Supported formats:");
@@ -668,8 +672,8 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
     let mut scaled_w = SCREEN_WIDTH * scale;
     let mut scaled_h = SCREEN_HEIGHT * scale;
     let make_title = |game_t: &str| -> String {
-        if game_t.is_empty() { "Arduboy v0.7.1".to_string() }
-        else { format!("Arduboy v0.7.1 - {}", game_t) }
+        if game_t.is_empty() { "Arduboy v0.7.2".to_string() }
+        else { format!("Arduboy v0.7.2 - {}", game_t) }
     };
     let mut title_base = make_title(game_title);
 
@@ -1395,7 +1399,7 @@ fn run_step_mode(args: &[String], arduboy: &mut Arduboy) {
         .and_then(|s| s.parse().ok())
         .unwrap_or(100_000);
 
-    println!("Interactive Debugger v0.7.1");
+    println!("Interactive Debugger v0.7.2");
     println!("Commands:");
     println!("  <Enter>/<N>  Step 1 or N instructions");
     println!("  r/run        Run to breakpoint/watchpoint");

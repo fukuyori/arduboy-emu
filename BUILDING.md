@@ -27,13 +27,39 @@ cd installers\windows
 build-windows.bat
 ```
 
-**Output:** `dist\windows\arduboy-emu-0.7.1-setup-x64.exe`
+**Output:** `dist\windows\arduboy-emu-0.7.2-setup-x64.exe`
 
 The installer includes:
 - Start Menu shortcut
 - Optional desktop shortcut
 - Optional `.hex` / `.arduboy` file associations
 - Uninstaller
+
+### Windows — MSI (.msi)
+
+**Prerequisites:**
+- [Rust](https://rustup.rs/)
+- [.NET SDK 6+](https://dotnet.microsoft.com/download)
+- [WiX Toolset v4](https://wixtoolset.org/)
+
+```cmd
+rem Install WiX (one-time)
+dotnet tool install -g wix
+wix extension add WixToolset.UI.wixext
+
+rem Build MSI
+cd installers\windows
+build-msi.bat
+```
+
+**Output:** `dist\windows\arduboy-emu-0.7.2-x64.msi`
+
+Standard Windows Installer package with:
+- Per-user install (no admin required)
+- Major upgrade support (auto-removes old version)
+- `.arduboy` default association, `.hex` / `.elf` Open With registration
+- Start Menu + Desktop shortcuts
+- Clean uninstall via Settings → Apps
 
 ### Linux — .deb / .rpm
 
@@ -58,13 +84,13 @@ The installer includes:
 ```
 
 **Output:**
-- `dist/linux/arduboy-emu_0.7.1_amd64.deb`
-- `dist/linux/arduboy-emu-0.7.1-1.x86_64.rpm`
+- `dist/linux/arduboy-emu_0.7.2_amd64.deb`
+- `dist/linux/arduboy-emu-0.7.2-1.x86_64.rpm`
 
 **Install:**
 ```bash
-sudo dpkg -i dist/linux/arduboy-emu_0.7.1_amd64.deb     # Debian/Ubuntu
-sudo rpm -i dist/linux/arduboy-emu-0.7.1-1.x86_64.rpm   # Fedora/RHEL
+sudo dpkg -i dist/linux/arduboy-emu_0.7.2_amd64.deb     # Debian/Ubuntu
+sudo rpm -i dist/linux/arduboy-emu-0.7.2-1.x86_64.rpm   # Fedora/RHEL
 ```
 
 Packages install `arduboy-emu` to `/usr/bin/` with a `.desktop` entry, MIME type for `.arduboy` files, and AppStream metadata.
@@ -82,8 +108,8 @@ Packages install `arduboy-emu` to `/usr/bin/` with a `.desktop` entry, MIME type
 ```
 
 **Output:**
-- `dist/macos/ArduboyEmulator-0.7.1.pkg` — Standard macOS installer
-- `dist/macos/ArduboyEmulator-0.7.1.dmg` — Drag-and-drop disk image
+- `dist/macos/ArduboyEmulator-0.7.2.pkg` — Standard macOS installer
+- `dist/macos/ArduboyEmulator-0.7.2.dmg` — Drag-and-drop disk image
 
 The `.app` bundle includes `Info.plist` with file type associations for `.hex`, `.arduboy`, and `.elf` files.
 
@@ -92,8 +118,8 @@ The `.app` bundle includes `Info.plist` with file type associations for `.hex`, 
 Push a tag to trigger automatic builds on all platforms:
 
 ```bash
-git tag v0.7.1
-git push origin v0.7.1
+git tag v0.7.2
+git push origin v0.7.2
 ```
 
 The workflow (`.github/workflows/release.yml`) builds all packages and creates a draft GitHub Release with all artifacts attached. See the workflow file for details.
@@ -112,8 +138,10 @@ Then uncomment the `SetupIconFile` line in `installers/windows/arduboy-emu.iss`.
 ```
 installers/
 ├── windows/
-│   ├── arduboy-emu.iss       # Inno Setup script
-│   └── build-windows.bat     # Build automation
+│   ├── arduboy-emu.iss       # Inno Setup script (.exe installer)
+│   ├── build-windows.bat     # Inno Setup build automation
+│   ├── arduboy-emu.wxs       # WiX v4 source (.msi installer)
+│   └── build-msi.bat         # MSI build automation
 ├── linux/
 │   └── build-linux.sh        # .deb + .rpm builder
 └── macos/

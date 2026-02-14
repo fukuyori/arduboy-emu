@@ -1,9 +1,9 @@
 @echo off
 rem ============================================================
-rem  Arduboy Emulator - Windows Installer Builder v0.7.1
+rem  Arduboy Emulator - Windows Installer Builder v0.7.2
 rem ============================================================
 
-set VERSION=0.7.1
+set VERSION=0.7.2
 set PROJECT_ROOT=%~dp0..\..
 
 echo ===================================
