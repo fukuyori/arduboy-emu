@@ -1,6 +1,6 @@
 //! # arduboy-core
 //!
-//! Cycle-accurate emulation core for the Arduboy handheld game console (v0.7.3).
+//! Cycle-accurate emulation core for the Arduboy handheld game console (v0.8.0).
 //!
 //! Emulates the ATmega32u4 microcontroller (Arduboy) and ATmega328P (Gamebuino
 //! Classic / Arduino Uno) with 16 MHz clock, 32 KB flash, 2–2.5 KB SRAM,
@@ -23,6 +23,7 @@
 //! - [`gdb_server`] — GDB Remote Serial Protocol server for avr-gdb
 //! - [`elf`] — ELF/DWARF parser for debug symbols and source-level debugging
 //! - [`snapshot`] — Emulator state snapshots for rewind functionality
+//! - [`savestate`] — Save state (quick save/load) with bincode serialization
 //!
 //! ## Audio
 //!
@@ -52,6 +53,7 @@ pub mod debugger;
 pub mod gdb_server;
 pub mod elf;
 pub mod snapshot;
+pub mod savestate;
 
 pub use cpu::Cpu;
 pub use display::Ssd1306;
@@ -1744,6 +1746,164 @@ impl Arduboy {
         self.mem.flash[..flash_len].copy_from_slice(&elf.flash[..flash_len]);
         self.reset();
         Ok(elf)
+    }
+
+    // ─── Save state (quick save / quick load) ──────────────────────────────
+
+    /// CPU type as a byte for save state header.
+    pub fn cpu_type_byte(&self) -> u8 {
+        match self.cpu_type {
+            CpuType::Atmega32u4 => 0,
+            CpuType::Atmega328p => 1,
+        }
+    }
+
+    /// Capture the full emulator state for save state.
+    pub fn save_full_state(&self) -> savestate::SaveState {
+        savestate::SaveState {
+            // CPU
+            pc: self.cpu.pc,
+            sp: self.cpu.sp,
+            sreg: self.cpu.sreg,
+            tick: self.cpu.tick,
+            sleeping: self.cpu.sleeping,
+
+            // Memory
+            data: self.mem.data.clone(),
+            eeprom: self.mem.eeprom.clone(),
+
+            // Display
+            display: self.display.save_state(),
+            pcd8544: self.pcd8544.save_state(),
+            display_type: match self.display_type {
+                DisplayType::Unknown => 0,
+                DisplayType::Ssd1306 => 1,
+                DisplayType::Pcd8544 => 2,
+            },
+
+            // Timers
+            timer0: self.timer0.save_state(),
+            timer1: self.timer1.save_state(),
+            timer2: self.timer2.save_state(),
+            timer3: self.timer3.save_state(),
+            timer4: self.timer4.save_state(),
+
+            // Peripherals
+            spi: self.spi.save_state(),
+            adc: self.adc.save_state(),
+            pll: self.pll.save_state(),
+            fx_flash: self.fx_flash.save_state(),
+
+            // GPIO
+            pin_b: self.pin_b,
+            pin_c: self.pin_c,
+            pin_d: self.pin_d,
+            pin_e: self.pin_e,
+            pin_f: self.pin_f,
+
+            // Misc
+            spdr_in: self.spdr_in,
+            rng_state: self.rng_state,
+            frame_count: self.frame_count,
+            fx_cs_prev: self.fx_cs_prev,
+            pcd_cs_bit: self.pcd_cs_bit,
+            pcd_dc_bit: self.pcd_dc_bit,
+            speaker_prev_pc6: self.speaker_prev_pc6,
+            speaker_last_edge: self.speaker_last_edge,
+            speaker_half_period: self.speaker_half_period,
+            speaker_last_active: self.speaker_last_active,
+            speaker2_prev_pb5: self.speaker2_prev_pb5,
+            speaker2_last_edge: self.speaker2_last_edge,
+            speaker2_half_period: self.speaker2_half_period,
+            speaker2_last_active: self.speaker2_last_active,
+            usb_uenum: self.usb_uenum,
+            usb_configured: self.usb_configured,
+            led_rgb: self.led_rgb,
+            led_tx: self.led_tx,
+            led_rx: self.led_rx,
+            audio_left_level: self.audio_buf.left.level,
+            audio_right_level: self.audio_buf.right.level,
+        }
+    }
+
+    /// Restore the full emulator state from a save state.
+    /// Clears the rewind buffer state (caller should also clear external RewindBuffer).
+    pub fn load_full_state(&mut self, s: &savestate::SaveState) {
+        // CPU
+        self.cpu.pc = s.pc;
+        self.cpu.sp = s.sp;
+        self.cpu.sreg = s.sreg;
+        self.cpu.tick = s.tick;
+        self.cpu.sleeping = s.sleeping;
+
+        // Memory
+        let len = s.data.len().min(self.mem.data.len());
+        self.mem.data[..len].copy_from_slice(&s.data[..len]);
+        let elen = s.eeprom.len().min(self.mem.eeprom.len());
+        self.mem.eeprom[..elen].copy_from_slice(&s.eeprom[..elen]);
+
+        // Display
+        self.display.load_state(&s.display);
+        self.pcd8544.load_state(&s.pcd8544);
+        self.display_type = match s.display_type {
+            1 => DisplayType::Ssd1306,
+            2 => DisplayType::Pcd8544,
+            _ => DisplayType::Unknown,
+        };
+
+        // Timers
+        self.timer0.load_state(&s.timer0);
+        self.timer1.load_state(&s.timer1);
+        self.timer2.load_state(&s.timer2);
+        self.timer3.load_state(&s.timer3);
+        self.timer4.load_state(&s.timer4);
+
+        // Peripherals
+        self.spi.load_state(&s.spi);
+        self.adc.load_state(&s.adc);
+        self.pll.load_state(&s.pll);
+        self.fx_flash.load_state(savestate::FxFlashState {
+            data: s.fx_flash.data.clone(),
+            loaded: s.fx_flash.loaded,
+            write_enabled: s.fx_flash.write_enabled,
+            powered_down: s.fx_flash.powered_down,
+        });
+
+        // GPIO
+        self.pin_b = s.pin_b;
+        self.pin_c = s.pin_c;
+        self.pin_d = s.pin_d;
+        self.pin_e = s.pin_e;
+        self.pin_f = s.pin_f;
+
+        // Misc
+        self.spdr_in = s.spdr_in;
+        self.rng_state = s.rng_state;
+        self.frame_count = s.frame_count;
+        self.fx_cs_prev = s.fx_cs_prev;
+        self.pcd_cs_bit = s.pcd_cs_bit;
+        self.pcd_dc_bit = s.pcd_dc_bit;
+        self.speaker_prev_pc6 = s.speaker_prev_pc6;
+        self.speaker_last_edge = s.speaker_last_edge;
+        self.speaker_half_period = s.speaker_half_period;
+        self.speaker_last_active = s.speaker_last_active;
+        self.speaker2_prev_pb5 = s.speaker2_prev_pb5;
+        self.speaker2_last_edge = s.speaker2_last_edge;
+        self.speaker2_half_period = s.speaker2_half_period;
+        self.speaker2_last_active = s.speaker2_last_active;
+        self.usb_uenum = s.usb_uenum;
+        self.usb_configured = s.usb_configured;
+        self.led_rgb = s.led_rgb;
+        self.led_tx = s.led_tx;
+        self.led_rx = s.led_rx;
+        self.audio_buf.left.level = s.audio_left_level;
+        self.audio_buf.right.level = s.audio_right_level;
+
+        // Clear transient state
+        self.spi_out.clear();
+        self.serial_buf.clear();
+        self.breakpoint_hit = false;
+        self.eeprom_dirty = false;
     }
 }
 

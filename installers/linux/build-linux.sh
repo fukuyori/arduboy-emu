@@ -9,17 +9,17 @@
 #    - rpmbuild (for .rpm — install: sudo dnf install rpm-build)
 #
 #  Usage:  ./build-linux.sh [--deb] [--rpm] [--all]
-#  Output: dist/linux/arduboy-emu_0.7.3_amd64.deb
-#          dist/linux/arduboy-emu-0.7.3-1.x86_64.rpm
+#  Output: dist/linux/arduboy-emu_0.8.0_amd64.deb
+#          dist/linux/arduboy-emu-0.8.0-1.x86_64.rpm
 # ============================================================
 
 set -euo pipefail
 
-VERSION="0.7.3"
+VERSION="0.8.0"
 ARCH="amd64"
 RPM_ARCH="x86_64"
 APP_NAME="arduboy-emu"
-BIN_NAME="arduboy-frontend"
+BIN_NAME="arduboy-emu"
 DESCRIPTION="Cycle-accurate Arduboy/Gamebuino emulator with debug tools"
 MAINTAINER="arduboy-emu contributors"
 URL="https://github.com/example/arduboy-emu"

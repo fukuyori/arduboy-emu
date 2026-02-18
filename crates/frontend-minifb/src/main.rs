@@ -1,4 +1,4 @@
-//! Arduboy emulator frontend v0.7.3.
+//! Arduboy emulator frontend v0.8.0.
 //!
 // Hide the console window on Windows in release builds.
 // Debug builds still show it for eprintln!() diagnostics.
@@ -15,7 +15,9 @@
 //! - **GDB mode** (`--gdb <port>`): GDB Remote Serial Protocol server for
 //!   connection from avr-gdb or compatible clients.
 //!
-//! ## v0.7.3 features
+//! ## v0.8.0 features
+//! - Quick save (F5) / quick load (F9) with full emulator state persistence
+//! - Windows binary renamed from `arduboy-frontend.exe` to `arduboy-emu.exe`
 //! - Interactive debugger: `ram`, `io`, `w` (watchpoint), `prof`, `snap`/`ramdiff`
 //! - Execution profiler: PC histogram, hotspot analysis, call graph tracking
 //! - GDB Remote Serial Protocol server (`--gdb <port>`)
@@ -502,7 +504,7 @@ fn main() {
 
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Arduboy Emulator v0.7.3 - Rust");
+        eprintln!("Arduboy Emulator v0.8.0 - Rust");
         eprintln!("Usage: {} <file.hex|.arduboy|.elf> [options]", args[0]);
         eprintln!();
         eprintln!("Supported formats:");
@@ -705,8 +707,8 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
     let mut scaled_w = SCREEN_WIDTH * scale;
     let mut scaled_h = SCREEN_HEIGHT * scale;
     let make_title = |game_t: &str| -> String {
-        if game_t.is_empty() { "Arduboy v0.7.3".to_string() }
-        else { format!("Arduboy v0.7.3 - {}", game_t) }
+        if game_t.is_empty() { "Arduboy v0.8.0".to_string() }
+        else { format!("Arduboy v0.8.0 - {}", game_t) }
     };
     let mut title_base = make_title(game_title);
 
@@ -781,6 +783,14 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
     // Rewind buffer: snapshot every 30 frames (~0.5s), up to 600 slots (~5 min)
     let mut rewind = arduboy_core::snapshot::RewindBuffer::new(600, 30);
     let mut prev_backspace = false;
+
+    // Save state path
+    let mut state_path = arduboy_core::savestate::state_path(&cur_hex_path);
+    // Notification message (shown in title bar temporarily)
+    let mut notify_msg: Option<String> = None;
+    let mut notify_until = Instant::now();
+    let mut prev_f5 = false;
+    let mut prev_f9 = false;
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         if let Some(ref mut g) = gilrs { poll_gamepad(g, &mut gp, debug); }
@@ -988,6 +998,7 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
             match switch_game(arduboy, &path, &eep_path, no_save, debug) {
                 Ok((hp, title, ep)) => {
                     cur_hex_path = hp; eep_path = ep;
+                    state_path = arduboy_core::savestate::state_path(&cur_hex_path);
                     title_base = make_title(&title);
                     game_index = next_idx;
                     frame_count = 0;
@@ -1008,6 +1019,7 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
             match switch_game(arduboy, &path, &eep_path, no_save, debug) {
                 Ok((hp, title, ep)) => {
                     cur_hex_path = hp; eep_path = ep;
+                    state_path = arduboy_core::savestate::state_path(&cur_hex_path);
                     title_base = make_title(&title);
                     game_index = prev_idx;
                     frame_count = 0;
@@ -1028,6 +1040,52 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
                 frame_count, arduboy.dump_regs(), arduboy.disasm_at_pc());
         }
         prev_d = d;
+
+        // Quick Save (F5)
+        let f5 = window.is_key_down(Key::F5);
+        if f5 && !prev_f5 {
+            let state = arduboy.save_full_state();
+            let cpu_byte = arduboy.cpu_type_byte();
+            match arduboy_core::savestate::save_to_file(
+                &state, cpu_byte, std::path::Path::new(&state_path)
+            ) {
+                Ok(()) => {
+                    let size = std::fs::metadata(&state_path).map(|m| m.len()).unwrap_or(0);
+                    eprintln!("State saved: {} ({} bytes)", state_path, size);
+                    notify_msg = Some("State saved".to_string());
+                    notify_until = Instant::now() + Duration::from_secs(2);
+                }
+                Err(e) => {
+                    eprintln!("Save state error: {}", e);
+                    notify_msg = Some(format!("Save error: {}", e));
+                    notify_until = Instant::now() + Duration::from_secs(3);
+                }
+            }
+        }
+        prev_f5 = f5;
+
+        // Quick Load (F9)
+        let f9 = window.is_key_down(Key::F9);
+        if f9 && !prev_f9 {
+            let cpu_byte = arduboy.cpu_type_byte();
+            match arduboy_core::savestate::load_from_file(
+                std::path::Path::new(&state_path), cpu_byte
+            ) {
+                Ok(state) => {
+                    arduboy.load_full_state(&state);
+                    rewind.clear();
+                    eprintln!("State loaded: {}", state_path);
+                    notify_msg = Some("State loaded".to_string());
+                    notify_until = Instant::now() + Duration::from_secs(2);
+                }
+                Err(e) => {
+                    eprintln!("Load state error: {}", e);
+                    notify_msg = Some(format!("Load error: {}", e));
+                    notify_until = Instant::now() + Duration::from_secs(3);
+                }
+            }
+        }
+        prev_f9 = f9;
 
         // Input
         arduboy.set_button(Button::Up,    window.is_key_down(Key::Up)    || gp.eff_up());
@@ -1395,8 +1453,17 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
             let prf = if arduboy.profiler.enabled { " [PROF]" } else { "" };
             let flt = if arduboy.audio_buf.filters_enabled { " [FILT]" } else { "" };
             let prt = if portrait { " [PORT]" } else { "" };
-            window.set_title(&format!("{} - {:.0} FPS{}{}{}{}{}{}{}{}{}{}{}{} ({}x)",
-                title_base, fps, ti, ms, fs, rec, led, tx, rx, lcd, blr, prf, flt, prt, cur_scale));
+            let ntf = if notify_msg.is_some() && Instant::now() < notify_until {
+                format!(" [{}]", notify_msg.as_ref().unwrap())
+            } else {
+                if notify_msg.is_some() && Instant::now() >= notify_until {
+                    notify_msg = None;
+                }
+                String::new()
+            };
+            window.set_title(&format!("{} - {:.0} FPS{}{}{}{}{}{}{}{}{}{}{}{}{} ({}x)",
+                title_base, fps, ti, ms, fs, rec, led, tx, rx, lcd, blr, prf, flt, prt, ntf, cur_scale,
+            ));
             fps_frames = 0;
             last_fps_time = Instant::now();
         }
@@ -1432,7 +1499,7 @@ fn run_step_mode(args: &[String], arduboy: &mut Arduboy) {
         .and_then(|s| s.parse().ok())
         .unwrap_or(100_000);
 
-    println!("Interactive Debugger v0.7.3");
+    println!("Interactive Debugger v0.8.0");
     println!("Commands:");
     println!("  <Enter>/<N>  Step 1 or N instructions");
     println!("  r/run        Run to breakpoint/watchpoint");

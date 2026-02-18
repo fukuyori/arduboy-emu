@@ -1,11 +1,13 @@
 [package]
 name = "arduboy-core"
-version = "0.7.3"
+version = "0.8.0"
 edition = "2021"
 description = "Cycle-accurate ATmega32u4 emulation core for Arduboy"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
 miniz_oxide = "0.8"
+serde = { version = "1", features = ["derive"] }
+bincode = "1"
 
 [dev-dependencies]

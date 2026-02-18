@@ -351,4 +351,30 @@ impl Timer16 {
         }
         clock as f32 / (2.0 * self.prescale as f32 * (self.ocr_a as f32 + 1.0))
     }
+
+    /// Capture state for save state.
+    pub fn save_state(&self) -> crate::savestate::Timer16State {
+        crate::savestate::Timer16State {
+            tick: self.tick, prescale: self.prescale, tcnt: self.tcnt,
+            top: self.top, ctc: self.ctc, wgm: self.wgm, cs: self.cs,
+            com_a: self.com_a, com_b: self.com_b, com_c: self.com_c,
+            ocr_a: self.ocr_a, ocr_b: self.ocr_b, ocr_c: self.ocr_c,
+            foc_a: self.foc_a, foc_b: self.foc_b, foc_c: self.foc_c,
+            tov: self.tov, ocf_a: self.ocf_a, ocf_b: self.ocf_b, ocf_c: self.ocf_c,
+            toie: self.toie, ocie_a: self.ocie_a, ocie_b: self.ocie_b, ocie_c: self.ocie_c,
+            old_wgm: self.old_wgm,
+        }
+    }
+
+    /// Restore state from save state.
+    pub fn load_state(&mut self, s: &crate::savestate::Timer16State) {
+        self.tick = s.tick; self.prescale = s.prescale; self.tcnt = s.tcnt;
+        self.top = s.top; self.ctc = s.ctc; self.wgm = s.wgm; self.cs = s.cs;
+        self.com_a = s.com_a; self.com_b = s.com_b; self.com_c = s.com_c;
+        self.ocr_a = s.ocr_a; self.ocr_b = s.ocr_b; self.ocr_c = s.ocr_c;
+        self.foc_a = s.foc_a; self.foc_b = s.foc_b; self.foc_c = s.foc_c;
+        self.tov = s.tov; self.ocf_a = s.ocf_a; self.ocf_b = s.ocf_b; self.ocf_c = s.ocf_c;
+        self.toie = s.toie; self.ocie_a = s.ocie_a; self.ocie_b = s.ocie_b; self.ocie_c = s.ocie_c;
+        self.old_wgm = s.old_wgm;
+    }
 }

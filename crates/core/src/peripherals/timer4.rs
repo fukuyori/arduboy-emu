@@ -275,4 +275,26 @@ impl Timer4 {
         }
         None
     }
+
+    /// Capture state for save state.
+    pub fn save_state(&self) -> crate::savestate::Timer4State {
+        crate::savestate::Timer4State {
+            tcnt: self.tcnt, tc4h: self.tc4h,
+            ocr_a: self.ocr_a, ocr_b: self.ocr_b, ocr_c: self.ocr_c, ocr_d: self.ocr_d,
+            tccr_a: self.tccr_a, tccr_b: self.tccr_b, tccr_c: self.tccr_c,
+            tccr_d: self.tccr_d, tccr_e: self.tccr_e, dt4: self.dt4, timsk: self.timsk,
+            cs: self.cs, prescale: self.prescale, tick: self.tick, wgm: self.wgm,
+            tov: self.tov, ocf_a: self.ocf_a, ocf_b: self.ocf_b, ocf_d: self.ocf_d,
+        }
+    }
+
+    /// Restore state from save state.
+    pub fn load_state(&mut self, s: &crate::savestate::Timer4State) {
+        self.tcnt = s.tcnt; self.tc4h = s.tc4h;
+        self.ocr_a = s.ocr_a; self.ocr_b = s.ocr_b; self.ocr_c = s.ocr_c; self.ocr_d = s.ocr_d;
+        self.tccr_a = s.tccr_a; self.tccr_b = s.tccr_b; self.tccr_c = s.tccr_c;
+        self.tccr_d = s.tccr_d; self.tccr_e = s.tccr_e; self.dt4 = s.dt4; self.timsk = s.timsk;
+        self.cs = s.cs; self.prescale = s.prescale; self.tick = s.tick; self.wgm = s.wgm;
+        self.tov = s.tov; self.ocf_a = s.ocf_a; self.ocf_b = s.ocf_b; self.ocf_d = s.ocf_d;
+    }
 }

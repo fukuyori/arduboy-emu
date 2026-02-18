@@ -1,9 +1,9 @@
 @echo off
 rem ============================================================
-rem  Arduboy Emulator - Windows Installer Builder v0.7.3
+rem  Arduboy Emulator - Windows Installer Builder v0.8.0
 rem ============================================================
 
-set VERSION=0.7.3
+set VERSION=0.8.0
 set PROJECT_ROOT=%~dp0..\..
 
 echo ===================================
@@ -52,11 +52,11 @@ if errorlevel 1 (
 )
 popd
 
-if not exist "%PROJECT_ROOT%\target\release\arduboy-frontend.exe" (
-    echo ERROR: arduboy-frontend.exe not found
+if not exist "%PROJECT_ROOT%\target\release\arduboy-emu.exe" (
+    echo ERROR: arduboy-emu.exe not found
     exit /b 1
 )
-echo      OK: target\release\arduboy-frontend.exe
+echo      OK: target\release\arduboy-emu.exe
 echo.
 
 rem --- Step 2: Find Inno Setup ---
@@ -73,7 +73,7 @@ if exist "%ISCC%" goto iscc_found
 echo WARNING: Inno Setup 6 not found. Skipping installer creation.
 echo          Install from https://jrsoftware.org/isinfo.php
 echo.
-echo Binary is ready at: target\release\arduboy-frontend.exe
+echo Binary is ready at: target\release\arduboy-emu.exe
 exit /b 0
 
 :iscc_found

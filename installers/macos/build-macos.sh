@@ -9,16 +9,16 @@
 #    - Optional: codesign identity for signing
 #
 #  Usage:  ./build-macos.sh [--sign "Developer ID"] [--universal]
-#  Output: dist/macos/ArduboyEmulator-0.7.3.pkg
-#          dist/macos/ArduboyEmulator-0.7.3.dmg
+#  Output: dist/macos/ArduboyEmulator-0.8.0.pkg
+#          dist/macos/ArduboyEmulator-0.8.0.dmg
 # ============================================================
 
 set -euo pipefail
 
-VERSION="0.7.3"
+VERSION="0.8.0"
 APP_NAME="Arduboy Emulator"
 BUNDLE_ID="com.arduboy-emu.emulator"
-BIN_NAME="arduboy-frontend"
+BIN_NAME="arduboy-emu"
 INSTALL_BIN_NAME="arduboy-emu"
 MIN_MACOS="11.0"
 

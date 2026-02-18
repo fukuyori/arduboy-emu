@@ -66,4 +66,18 @@ impl Spi {
         }
         None
     }
+
+    /// Capture state for save state.
+    pub fn save_state(&self) -> crate::savestate::SpiState {
+        crate::savestate::SpiState {
+            spif: self.spif, wcol: self.wcol, spi2x: self.spi2x,
+            spie: self.spie, spe: self.spe,
+        }
+    }
+
+    /// Restore state from save state.
+    pub fn load_state(&mut self, s: &crate::savestate::SpiState) {
+        self.spif = s.spif; self.wcol = s.wcol; self.spi2x = s.spi2x;
+        self.spie = s.spie; self.spe = s.spe;
+    }
 }

@@ -1,6 +1,6 @@
 @echo off
 rem ============================================================
-rem  Arduboy Emulator - MSI Installer Builder v0.7.3
+rem  Arduboy Emulator - MSI Installer Builder v0.8.0
 rem  Uses WiX Toolset v5/v6 (dotnet tool)
 rem
 rem  Prerequisites:
@@ -9,10 +9,10 @@ rem    - .NET SDK 6+ (https://dotnet.microsoft.com/download)
 rem    - WiX: dotnet tool install -g wix
 rem
 rem  Usage:  build-msi.bat
-rem  Output: dist\windows\arduboy-emu-0.7.3-x64.msi
+rem  Output: dist\windows\arduboy-emu-0.8.0-x64.msi
 rem ============================================================
 
-set VERSION=0.7.3
+set VERSION=0.8.0
 set PROJECT_ROOT=%~dp0..\..
 
 echo ===================================
@@ -56,11 +56,11 @@ if errorlevel 1 (
 )
 popd
 
-if not exist "%PROJECT_ROOT%\target\release\arduboy-frontend.exe" (
-    echo ERROR: arduboy-frontend.exe not found
+if not exist "%PROJECT_ROOT%\target\release\arduboy-emu.exe" (
+    echo ERROR: arduboy-emu.exe not found
     exit /b 1
 )
-echo      OK: target\release\arduboy-frontend.exe
+echo      OK: target\release\arduboy-emu.exe
 echo.
 
 rem --- Step 2: Build MSI ---

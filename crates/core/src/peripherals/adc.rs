@@ -84,6 +84,20 @@ impl Adc {
         }
         None
     }
+
+    /// Capture state for save state.
+    pub fn save_state(&self) -> crate::savestate::AdcState {
+        crate::savestate::AdcState {
+            aden: self.aden, adsc: self.adsc, adie: self.adie, adif: self.adif,
+            adch: self.adch, adcl: self.adcl,
+        }
+    }
+
+    /// Restore state from save state.
+    pub fn load_state(&mut self, s: &crate::savestate::AdcState) {
+        self.aden = s.aden; self.adsc = s.adsc; self.adie = s.adie; self.adif = s.adif;
+        self.adch = s.adch; self.adcl = s.adcl;
+    }
 }
 
 fn xorshift(state: &mut u32) -> u8 {

@@ -311,4 +311,26 @@ impl Timer8 {
     pub fn ocr_b(&self) -> u8 {
         self.ocr0b
     }
+
+    /// Capture state for save state.
+    pub fn save_state(&self) -> crate::savestate::Timer8State {
+        crate::savestate::Timer8State {
+            tick: self.tick, prescale: self.prescale, cs: self.cs, mode: self.mode,
+            wgm00: self.wgm00, wgm01: self.wgm01, wgm02: self.wgm02,
+            com_a: self.com_a, com_b: self.com_b,
+            ocr0a: self.ocr0a, ocr0b: self.ocr0b, tcnt_shadow: self.tcnt_shadow,
+            tov0: self.tov0, ocf0a: self.ocf0a, ocf0b: self.ocf0b,
+            toie0: self.toie0, ocie0a: self.ocie0a, ocie0b: self.ocie0b,
+        }
+    }
+
+    /// Restore state from save state.
+    pub fn load_state(&mut self, s: &crate::savestate::Timer8State) {
+        self.tick = s.tick; self.prescale = s.prescale; self.cs = s.cs; self.mode = s.mode;
+        self.wgm00 = s.wgm00; self.wgm01 = s.wgm01; self.wgm02 = s.wgm02;
+        self.com_a = s.com_a; self.com_b = s.com_b;
+        self.ocr0a = s.ocr0a; self.ocr0b = s.ocr0b; self.tcnt_shadow = s.tcnt_shadow;
+        self.tov0 = s.tov0; self.ocf0a = s.ocf0a; self.ocf0b = s.ocf0b;
+        self.toie0 = s.toie0; self.ocie0a = s.ocie0a; self.ocie0b = s.ocie0b;
+    }
 }

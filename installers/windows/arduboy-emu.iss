@@ -3,10 +3,10 @@
 ; Requires: Inno Setup 6.x (https://jrsoftware.org/isinfo.php)
 
 #define MyAppName "Arduboy Emulator"
-#define MyAppVersion "0.7.3"
+#define MyAppVersion "0.8.0"
 #define MyAppPublisher "arduboy-emu"
 #define MyAppURL "https://github.com/example/arduboy-emu"
-#define MyAppExeName "arduboy-frontend.exe"
+#define MyAppExeName "arduboy-emu.exe"
 
 [Setup]
 AppId={{B8A3F2E1-4D5C-6E7F-8A9B-0C1D2E3F4A5B}

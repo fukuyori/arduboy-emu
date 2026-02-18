@@ -186,4 +186,27 @@ impl Pcd8544 {
         self.dbg_cmd_count = 0;
         self.dbg_data_count = 0;
     }
+
+    /// Capture state for save state.
+    pub fn save_state(&self) -> crate::savestate::Pcd8544State {
+        crate::savestate::Pcd8544State {
+            framebuffer: self.framebuffer.to_vec(),
+            vram: self.vram.to_vec(),
+            x_addr: self.x_addr, y_addr: self.y_addr,
+            extended_mode: self.extended_mode, display_mode: self.display_mode,
+            power_down: self.power_down, vertical_addressing: self.vertical_addressing,
+        }
+    }
+
+    /// Restore state from save state.
+    pub fn load_state(&mut self, s: &crate::savestate::Pcd8544State) {
+        let fb_len = s.framebuffer.len().min(self.framebuffer.len());
+        self.framebuffer[..fb_len].copy_from_slice(&s.framebuffer[..fb_len]);
+        let vram_len = s.vram.len().min(self.vram.len());
+        self.vram[..vram_len].copy_from_slice(&s.vram[..vram_len]);
+        self.x_addr = s.x_addr; self.y_addr = s.y_addr;
+        self.extended_mode = s.extended_mode; self.display_mode = s.display_mode;
+        self.power_down = s.power_down; self.vertical_addressing = s.vertical_addressing;
+        self.dirty = true;
+    }
 }

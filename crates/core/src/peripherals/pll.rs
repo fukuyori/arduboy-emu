@@ -29,4 +29,16 @@ impl Pll {
         self.plle = value & 0x02 != 0;
         self.plock = true; // PLL locks instantly in emulation
     }
+
+    /// Capture state for save state.
+    pub fn save_state(&self) -> crate::savestate::PllState {
+        crate::savestate::PllState {
+            pindiv: self.pindiv, plle: self.plle, plock: self.plock,
+        }
+    }
+
+    /// Restore state from save state.
+    pub fn load_state(&mut self, s: &crate::savestate::PllState) {
+        self.pindiv = s.pindiv; self.plle = s.plle; self.plock = s.plock;
+    }
 }

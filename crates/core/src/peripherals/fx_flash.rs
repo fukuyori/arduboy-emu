@@ -260,4 +260,23 @@ impl FxFlash {
             }
         }
     }
+
+    /// Capture state for save state. FX command state is reset to Idle.
+    pub fn save_state(&self) -> crate::savestate::FxFlashState {
+        crate::savestate::FxFlashState {
+            data: self.data.clone(),
+            loaded: self.loaded,
+            write_enabled: self.write_enabled,
+            powered_down: self.powered_down,
+        }
+    }
+
+    /// Restore state from save state.
+    pub fn load_state(&mut self, s: crate::savestate::FxFlashState) {
+        self.data = s.data;
+        self.loaded = s.loaded;
+        self.write_enabled = s.write_enabled;
+        self.powered_down = s.powered_down;
+        self.state = FxState::Idle; // Reset transient SPI state
+    }
 }

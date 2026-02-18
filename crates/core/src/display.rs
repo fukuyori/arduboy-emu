@@ -224,6 +224,32 @@ impl Ssd1306 {
         }
         pixels
     }
+
+    /// Capture state for save state.
+    pub fn save_state(&self) -> crate::savestate::Ssd1306State {
+        crate::savestate::Ssd1306State {
+            framebuffer: self.framebuffer.to_vec(),
+            col: self.col, page: self.page,
+            col_start: self.col_start, col_end: self.col_end,
+            page_start: self.page_start, page_end: self.page_end,
+            inverted: self.inverted, display_on: self.display_on,
+            contrast: self.contrast,
+        }
+    }
+
+    /// Restore state from save state.
+    pub fn load_state(&mut self, s: &crate::savestate::Ssd1306State) {
+        let len = s.framebuffer.len().min(self.framebuffer.len());
+        self.framebuffer[..len].copy_from_slice(&s.framebuffer[..len]);
+        self.col = s.col; self.page = s.page;
+        self.col_start = s.col_start; self.col_end = s.col_end;
+        self.page_start = s.page_start; self.page_end = s.page_end;
+        self.inverted = s.inverted; self.display_on = s.display_on;
+        self.contrast = s.contrast;
+        self.cmd_state = CmdState::Ready;
+        self.cmd_skip = 0;
+        self.dirty = true;
+    }
 }
 
 #[cfg(test)]
