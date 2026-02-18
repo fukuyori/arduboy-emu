@@ -1,6 +1,6 @@
 # arduboy-emu
 
-**v0.7.3** — A cycle-accurate Arduboy emulator written in Rust.
+**v0.8.1** — A cycle-accurate Arduboy emulator written in Rust.
 
 Emulates the ATmega32u4 (Arduboy) and ATmega328P (Gamebuino Classic) microcontrollers at 16 MHz with display, audio, gamepad, and Arduboy FX flash support. Includes an interactive debugger, execution profiler, and GDB server for avr-gdb integration.
 
@@ -20,6 +20,7 @@ Emulates the ATmega32u4 (Arduboy) and ATmega328P (Gamebuino Classic) microcontro
 - **GDB server** — Remote Serial Protocol over TCP for avr-gdb (`--gdb <port>`)
 - **ELF/DWARF debug** — Load `.elf` files with symbol table and source-level debugging
 - **Rewind** — Hold Backspace to rewind up to 5 minutes of gameplay
+- **Save states** — Quick save (F5) / quick load (F9) with full emulator state persistence
 - **Dynamic display** — Scale 1×–6× toggle, fullscreen, PNG screenshots, blur filter
 - **USB Serial** — Captures `Serial.print()` output via UEDATX register interception (32u4 only)
 - **Headless mode** — Automated testing with frame snapshots and diagnostics
@@ -108,6 +109,16 @@ game.hex → game.eep (auto-saved every 10s + on exit)
 
 Use `--no-save` to disable. EEPROM data survives hot reload (R key).
 
+### Save States
+
+Press **F5** to quick-save and **F9** to quick-load the full emulator state:
+
+```
+game.hex → game.state (CPU, RAM, EEPROM, timers, display, FX flash, ...)
+```
+
+Save files use deflate compression, CPU type validation, and a versioned binary format. Loading a save state clears the rewind buffer.
+
 ### Game Browser
 
 Press **O** to list all `.hex` and `.arduboy` files in the game's directory, then use **N** (next) and **P** (previous) to switch between them. EEPROM state is saved and loaded per game automatically.
@@ -146,6 +157,8 @@ Press **O** to list all `.hex` and `.arduboy` files in the game's directory, the
 | Portrait   | V          | —                           | — (rotate 90° left→bottom)    |
 | Profiler   | T          | —                           | — (toggle execution profiler) |
 | Rewind     | Backspace  | —                           | — (hold to rewind ~5 min)     |
+| Save state | F5         | —                           | — (quick save to .state file) |
+| Load state | F9         | —                           | — (quick load from .state)    |
 | Quit       | Escape     | —                           | —                             |
 
 Keyboard and gamepad inputs are OR-combined, so both can be used simultaneously.

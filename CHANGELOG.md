@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2025-02-18
+
+### Added
+
+- **Save states** — Quick save (F5) / quick load (F9) with full emulator state persistence to `.state` files. Uses bincode serialization with deflate compression, magic number validation, format versioning, and CPU type checking (ATmega32u4 ↔ ATmega328P mismatch prevention). Loading a save state clears the rewind buffer.
+
+### Changed
+
+- **Windows binary renamed** — `arduboy-frontend.exe` → `arduboy-emu.exe` for consistency with Linux/macOS
+- All installer scripts (Windows InnoSetup/WiX, Linux deb/rpm, macOS pkg/dmg) updated for new binary name
+- Version bumped to 0.8.1
+
 ## [0.7.3] - 2025-02-14
 
 ### Fixed

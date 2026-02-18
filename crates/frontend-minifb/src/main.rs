@@ -1,4 +1,4 @@
-//! Arduboy emulator frontend v0.8.0.
+//! Arduboy emulator frontend v0.8.1.
 //!
 // Hide the console window on Windows in release builds.
 // Debug builds still show it for eprintln!() diagnostics.
@@ -15,7 +15,7 @@
 //! - **GDB mode** (`--gdb <port>`): GDB Remote Serial Protocol server for
 //!   connection from avr-gdb or compatible clients.
 //!
-//! ## v0.8.0 features
+//! ## v0.8.1 features
 //! - Quick save (F5) / quick load (F9) with full emulator state persistence
 //! - Windows binary renamed from `arduboy-frontend.exe` to `arduboy-emu.exe`
 //! - Interactive debugger: `ram`, `io`, `w` (watchpoint), `prof`, `snap`/`ramdiff`
@@ -504,7 +504,7 @@ fn main() {
 
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Arduboy Emulator v0.8.0 - Rust");
+        eprintln!("Arduboy Emulator v0.8.1 - Rust");
         eprintln!("Usage: {} <file.hex|.arduboy|.elf> [options]", args[0]);
         eprintln!();
         eprintln!("Supported formats:");
@@ -707,8 +707,8 @@ fn run_gui(arduboy: &mut Arduboy, start_muted: bool, debug: bool, initial_scale:
     let mut scaled_w = SCREEN_WIDTH * scale;
     let mut scaled_h = SCREEN_HEIGHT * scale;
     let make_title = |game_t: &str| -> String {
-        if game_t.is_empty() { "Arduboy v0.8.0".to_string() }
-        else { format!("Arduboy v0.8.0 - {}", game_t) }
+        if game_t.is_empty() { "Arduboy v0.8.1".to_string() }
+        else { format!("Arduboy v0.8.1 - {}", game_t) }
     };
     let mut title_base = make_title(game_title);
 
@@ -1499,7 +1499,7 @@ fn run_step_mode(args: &[String], arduboy: &mut Arduboy) {
         .and_then(|s| s.parse().ok())
         .unwrap_or(100_000);
 
-    println!("Interactive Debugger v0.8.0");
+    println!("Interactive Debugger v0.8.1");
     println!("Commands:");
     println!("  <Enter>/<N>  Step 1 or N instructions");
     println!("  r/run        Run to breakpoint/watchpoint");

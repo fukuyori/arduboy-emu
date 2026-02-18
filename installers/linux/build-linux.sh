@@ -9,13 +9,13 @@
 #    - rpmbuild (for .rpm — install: sudo dnf install rpm-build)
 #
 #  Usage:  ./build-linux.sh [--deb] [--rpm] [--all]
-#  Output: dist/linux/arduboy-emu_0.8.0_amd64.deb
-#          dist/linux/arduboy-emu-0.8.0-1.x86_64.rpm
+#  Output: dist/linux/arduboy-emu_0.8.1_amd64.deb
+#          dist/linux/arduboy-emu-0.8.1-1.x86_64.rpm
 # ============================================================
 
 set -euo pipefail
 
-VERSION="0.8.0"
+VERSION="0.8.1"
 ARCH="amd64"
 RPM_ARCH="x86_64"
 APP_NAME="arduboy-emu"
@@ -88,7 +88,9 @@ if $BUILD_DEB; then
         echo "         Install: sudo apt install dpkg"
     else
         DEB_NAME="${APP_NAME}_${VERSION}_${ARCH}"
-        DEB_ROOT="$DIST_DIR/deb-staging/$DEB_NAME"
+        # Use /tmp for staging so chmod works on WSL (Windows FS ignores chmod)
+        DEB_STAGING="/tmp/arduboy-deb-staging"
+        DEB_ROOT="$DEB_STAGING/$DEB_NAME"
         rm -rf "$DEB_ROOT"
 
         # Directory structure
@@ -152,7 +154,7 @@ DESKTOP
     <binary>${APP_NAME}</binary>
   </provides>
   <releases>
-    <release version="${VERSION}" date="2025-02-14"/>
+    <release version="${VERSION}" date="2025-02-18"/>
   </releases>
 </component>
 META
@@ -187,13 +189,16 @@ fi
 POSTINST
         chmod 755 "$DEB_ROOT/DEBIAN/postinst"
 
+        # Fix directory permissions (required by dpkg-deb; WSL inherits 777 from Windows)
+        find "$DEB_ROOT" -type d -exec chmod 0755 {} +
+
         # Build .deb
         dpkg-deb --root-owner-group --build "$DEB_ROOT" "$DIST_DIR/$DEB_NAME.deb"
         echo "     Output: dist/linux/$DEB_NAME.deb"
         echo ""
 
         # Cleanup staging
-        rm -rf "$DIST_DIR/deb-staging"
+        rm -rf "$DEB_STAGING"
     fi
 else
     echo "[2/3] Skipping .deb (not requested)"
@@ -285,6 +290,10 @@ install -m 644 %{name}.desktop %{buildroot}%{_datadir}/applications/%{name}.desk
 %{_datadir}/applications/%{name}.desktop
 
 %changelog
+* Tue Feb 18 2025 arduboy-emu contributors - 0.8.1-1
+- Save states (F5/F9 quick save/load)
+- Windows binary renamed to arduboy-emu.exe
+
 * Fri Feb 14 2025 arduboy-emu contributors - 0.7.3-1
 - PWM DAC audio for Gamebuino Classic
 - Portrait rotation (V key)
